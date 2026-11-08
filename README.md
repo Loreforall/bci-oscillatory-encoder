@@ -2,7 +2,18 @@
 
 Experimental software that extracts visual features from short videos and maps them to **synthetic** multiband oscillatory templates. This is a computational research demonstration, **not** a neural stimulation system, validated visual-cortex encoder, or medical device.
 
-## Run locally
+## Web workbench
+
+The public interface uses Next.js and TypeScript. FastAPI calls the original Python feature extractor, deterministic encoder, optional GRU, and waveform synthesizer. Use the synthetic example, a short video, or a sequence of still images to inspect computed signals and export the run.
+
+See [Workbench deployment](DEPLOYMENT.md) for local setup, Vercel settings, backend configuration, and production verification.
+
+- `frontend/` contains the public workspace, methods, and collaboration information.
+- `backend/` exposes the bounded encoding API.
+- `Dockerfile` packages the private CPU service.
+- The original research modules and Gradio application remain at the repository root.
+
+## Run the original Gradio application locally
 
 ```bash
 python -m venv .venv
@@ -23,13 +34,9 @@ python -m pytest -q
 
 The GRU is trained to reproduce deterministic synthetic teacher targets, not recorded EEG or visual percepts. Comparison with a constant predictor is a *software-learning sanity check*, not a claim of neural encoding performance.
 
-## Private-core deployment
-
-Deploy the Gradio app as a Python service (e.g. Render, Railway or a private Hugging Face Space). A hosted Gradio interface does not expose source via the UI, but **hosting a public GitHub repository or a public Space makes the source publicly accessible**. Use a **private repository** and a hosting provider that supports deployment from it. Set resource limits, restrict uploads, and monitor service usage before sharing widely.
-
 ## Data and safety
 
-No stimulation waveforms, tACS/TMS/tFUS parameters, device-control instructions or claims of brain entrainment are provided. Generated waveforms are visualization-only, in arbitrary units. Avoid uploading sensitive video. The app writes transient export files to the host's temporary directory; configure cleanup and retention before public launch.
+No stimulation waveforms, tACS/TMS/tFUS parameters, device-control instructions or claims of brain entrainment are provided. Generated waveforms are visualization-only, in arbitrary units. Avoid uploading sensitive video. The original Gradio app writes transient export files to the host's temporary directory; configure cleanup and retention before public launch.
 
 ## Intellectual property
 

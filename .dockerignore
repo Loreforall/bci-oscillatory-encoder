@@ -1,0 +1,10 @@
+**
+!Dockerfile
+!baseline.py
+!model.py
+!synthesizer.py
+!visual_features.py
+!train.py
+!backend/
+!backend/api.py
+!backend/requirements.txt
