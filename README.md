@@ -4,14 +4,13 @@ Experimental software that extracts visual features from short videos and maps t
 
 ## Web workbench
 
-The public interface uses Next.js and TypeScript. FastAPI calls the original Python feature extractor, deterministic encoder, optional GRU, and waveform synthesizer. Use the synthetic example, a short video, or a sequence of still images to inspect computed signals and export the run.
+The public workbench runs the deterministic pipeline in the browser. It extracts visual features, computes four-band oscillatory templates, and synthesizes waveforms from a video, image sequence, or built-in moving grating. The browser also generates the plots and exports.
 
-See [Workbench deployment](DEPLOYMENT.md) for local setup, Vercel settings, backend configuration, and production verification.
+See [Vercel deployment](DEPLOYMENT.md) for deployment, browser media limits, and numerical verification against the original Python pipeline.
 
-- `frontend/` contains the public workspace, methods, and collaboration information.
-- `backend/` exposes the bounded encoding API.
-- `Dockerfile` packages the private CPU service.
-- The original research modules and Gradio application remain at the repository root.
+- `frontend/` contains the Next.js interface and its TypeScript scientific engine.
+- `backend/` and the root `Dockerfile` are optional interfaces for local Python research.
+- The original Python research modules and Gradio application remain at the repository root.
 
 ## Run the original Gradio application locally
 

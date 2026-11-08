@@ -1,26 +1,12 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useState } from 'react';
+import { analyze, type Input, type Result } from '../lib/encoder';
+import { readInput } from '../lib/media';
 
-const api = (process.env.NEXT_PUBLIC_ENCODER_URL ||
-  (process.env.NODE_ENV === 'development' ? 'http://localhost:8000' : '')).replace(/\/$/, '');
 const email = process.env.NEXT_PUBLIC_RESEARCH_EMAIL;
 const format = (n: number) => Number(n.toPrecision(5)).toString();
 
-type Template = { band_power: number[][][]; band_phase: number[][][]; spatial_weights: number[][] };
-type Result = {
-  signal_type: string;
-  input: {kind: string; width: number; height: number; frames: number; fps: number; processed_frames_sha256: string};
-  parameters: {encoder: string; channels: number; bands_hz: number[]; sample_rate_hz: number; window_seconds: number; feature_size: number[]};
-  feature_names: string[];
-  features: number[][];
-  motion_spectrum: {hz: number[]; power: number[]};
-  template: Template;
-  baseline: Template | null;
-  waveforms: number[][][];
-  metrics: {waveform_rms: number; peak_absolute: number; mean_band_power: number[]};
-  comparison: Record<string, number> | null;
-};
 type Trace = { label: string; values: number[] };
 
 function Plot({ title, traces, step, unit, range }: {
@@ -68,14 +54,12 @@ function exportCsv(result: Result) {
 }
 
 export default function Workbench() {
-  const [kind, setKind] = useState('synthetic');
-  const [encoder, setEncoder] = useState('baseline');
+  const [kind, setKind] = useState<Input['kind']>('synthetic');
   const [channels, setChannels] = useState(8);
   const [fps, setFps] = useState(24);
+  const [videoFps, setVideoFps] = useState(12);
   const [sampleRate, setSampleRate] = useState(250);
   const [files, setFiles] = useState<File[]>([]);
-  const [status, setStatus] = useState<'checking' | 'ready' | 'offline'>('checking');
-  const [learned, setLearned] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<Result>();
@@ -84,45 +68,18 @@ export default function Workbench() {
   const [frame, setFrame] = useState(0);
   const [feature, setFeature] = useState(0);
 
-  async function check() {
-    setStatus('checking');
-    try {
-      if (!api) throw new Error('Missing API URL');
-      const response = await fetch(`${api}/health`, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
-      if (!response.ok) throw new Error('Unreachable');
-      setLearned((await response.json()).learned === true);
-      setStatus('ready');
-    } catch {
-      setStatus('offline');
-    }
-  }
-
-  useEffect(() => { void check(); }, []);
-
   async function encode(event: FormEvent) {
     event.preventDefault();
     setError('');
-    if (!api) { setError('The workbench API URL is missing.'); return; }
-    if (kind !== 'synthetic' && (!files.length || files.length > 120 || files.reduce((n, file) => n + file.size, 0) >= 20 * 1024**2)) {
-      setError('Select up to 120 images or one video, below 20 MiB total.');
-      return;
-    }
-    const query = new URLSearchParams({kind, encoder, channels: String(encoder === 'learned' ? 8 : channels),
-      fps: String(fps), sample_rate: String(sampleRate)});
-    const body = new FormData();
-    if (kind !== 'synthetic') files.forEach(file => body.append('files', file));
     setBusy(true);
     try {
-      const response = await fetch(`${api}/encode?${query}`, {method: 'POST', body, signal: AbortSignal.timeout(90000)});
-      if (!response.ok) {
-        const problem = await response.json().catch(() => null);
-        setError(typeof problem?.detail === 'string' ? problem.detail : `Encoding failed (HTTP ${response.status}).`);
-        return;
-      }
-      setResult(await response.json());
+      // Let the busy state paint before synchronous feature and waveform work.
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+      const { frames, input } = await readInput(kind, files, kind === 'video' ? videoFps : fps);
+      setResult(await analyze(frames, input, channels, sampleRate));
       setChannel(0); setBand(0); setFrame(0); setFeature(0);
-    } catch {
-      setError('The encoder could not be reached or the request timed out.');
+    } catch (problem) {
+      setError(problem instanceof Error ? problem.message : 'Local processing failed.');
     } finally {
       setBusy(false);
     }
@@ -132,15 +89,13 @@ export default function Workbench() {
   const bandTraces = (key: 'band_power' | 'band_phase'): Trace[] => {
     if (!result) return [];
     const label = `${result.parameters.bands_hz[band]} Hz`;
-    const traces = [{label, values: result.template[key].map(row => row[channel][band])}];
-    if (result.baseline) traces.push({label: 'Deterministic baseline', values: result.baseline[key].map(row => row[channel][band])});
-    return traces;
+    return [{label, values: result.template[key].map(row => row[channel][band])}];
   };
   return <>
     <header>
       <div><small>COMPUTATIONAL SIGNAL LAB</small><h1>BCI Oscillatory Encoder</h1></div>
       <nav aria-label="Sections"><a href="#workspace">Workspace</a><a href="#methods">Methods</a><a href="#research">Collaboration</a></nav>
-      <button className="status" onClick={check} title="Check backend status"><i data-status={status}/>{status === 'ready' ? 'Engine online' : status === 'checking' ? 'Checking engine' : 'Engine offline'}</button>
+      <span className="status"><i data-status="ready"/>Browser engine</span>
     </header>
     <div className="notice">RESEARCH SIMULATION <span>Oscillatory templates are computational outputs. This workspace has no measured neural activity.</span></div>
     <main id="workspace">
@@ -149,23 +104,26 @@ export default function Workbench() {
         <form onSubmit={encode}>
           <fieldset disabled={busy}>
             <legend>Input</legend>
-            <label>Source<select value={kind} onChange={e => { setKind(e.target.value); setFiles([]); }}>
+            <label>Source<select value={kind} onChange={e => { setKind(e.target.value as Input['kind']); setFiles([]); }}>
               <option value="synthetic">Synthetic moving grating</option><option value="video">Video upload</option><option value="images">Image sequence</option>
             </select></label>
             {kind !== 'synthetic' && <label>Media files<input key={kind} type="file" required multiple={kind === 'images'}
-              accept={kind === 'images' ? 'image/png,image/jpeg,image/webp' : 'video/mp4,video/webm,video/quicktime,video/x-msvideo'}
+              accept={kind === 'images' ? 'image/png,image/jpeg,image/webp' : 'video/mp4,video/webm,video/quicktime'}
               onChange={e => setFiles(Array.from(e.target.files ?? []))}/></label>}
             {kind === 'images' && <label>Sequence rate (frames/s)<input type="number" min="1" max="120" step="any" required value={fps} onChange={e => setFps(e.target.valueAsNumber)}/></label>}
+            {kind === 'video' && <label>Video sampling rate (frames/s)<input type="number" min="1" max="120" step="any" required value={videoFps} onChange={e => setVideoFps(e.target.valueAsNumber)}/></label>}
             <p className="hint">{kind === 'synthetic' ? '48 frames · 128 × 96 px · 24 frames/s' :
-              '20 MiB per request · 120 frames · 2.07 MP per frame. Image sequences follow filename order.'}</p>
+              '20 MiB total · 120 samples · 2.07 MP per frame. Media stays in this browser.'}</p>
+            {kind === 'images' && <p className="hint">Image sequences follow filename order.</p>}
+            {kind === 'video' && <p className="hint">Video is sampled at the selected rate. Supported codecs depend on your browser.</p>}
           </fieldset>
           <fieldset disabled={busy}>
             <legend>Encoder</legend>
-            <label>Model<select value={encoder} onChange={e => setEncoder(e.target.value)}>
-              <option value="baseline">Deterministic baseline</option><option value="learned" disabled={!learned}>Learned GRU</option>
+            <label>Model<select defaultValue="baseline">
+              <option value="baseline">Deterministic baseline</option><option value="learned" disabled>Learned GRU</option>
             </select></label>
-            {!learned && <p className="hint">GRU requires a checkpoint that passes the held-out synthetic benchmark.</p>}
-            <label>Channels<input type="number" min="1" max="16" required disabled={encoder === 'learned'} value={encoder === 'learned' ? 8 : channels} onChange={e => setChannels(e.target.valueAsNumber)}/></label>
+            <p className="hint">Learned GRU and checkpoint comparisons are available in local Python research.</p>
+            <label>Channels<input type="number" min="1" max="16" required value={channels} onChange={e => setChannels(e.target.valueAsNumber)}/></label>
             <label>Synthesis rate (Hz)<input type="number" min="100" max="500" step="1" required value={sampleRate} onChange={e => setSampleRate(e.target.valueAsNumber)}/></label>
             <p className="hint">Fixed bands · 6 / 10 / 20 / 40 Hz<br/>Window · 0.5 s per input frame</p>
           </fieldset>
@@ -205,7 +163,7 @@ export default function Workbench() {
         {result ? <>
           <h3>Input</h3><dl>
             <dt>Source</dt><dd>{result.input.kind}</dd><dt>Resolution</dt><dd>{result.input.width} × {result.input.height}</dd>
-            <dt>Frames</dt><dd>{result.input.frames}</dd><dt>Frame rate</dt><dd>{format(result.input.fps)} fps</dd>
+            <dt>Frames</dt><dd>{result.input.frames}</dd><dt>Analysis rate</dt><dd>{format(result.input.fps)} fps</dd>
           </dl>
           <h3>Parameters</h3><dl>
             <dt>Encoder</dt><dd>{result.parameters.encoder}</dd><dt>Channels</dt><dd>{result.parameters.channels}</dd>
@@ -217,10 +175,7 @@ export default function Workbench() {
             <dt>Absolute peak</dt><dd>{format(result.metrics.peak_absolute)}</dd>
             <dt>Mean power · {result.parameters.bands_hz[band]} Hz</dt><dd>{format(result.metrics.mean_band_power[band])}</dd>
             <dt>Selected spatial weight</dt><dd>{format(result.template.spatial_weights[frame][channel])}</dd>
-            {result.comparison && Object.entries(result.comparison).map(([name, value]) =>
-              <div className="metric" key={name}><dt>{name.replaceAll('_', ' ')}</dt><dd>{format(value)}</dd></div>)}
           </dl>
-          {result.comparison && <p className="hint">Comparison metrics use the deterministic template as reference.</p>}
           <h3>Export</h3><div className="exports">
             <button onClick={() => exportCsv(result)}>Template CSV</button>
             <button onClick={() => save('oscillatory-run.json', 'application/json', JSON.stringify(result))}>Full run JSON</button>
@@ -232,9 +187,9 @@ export default function Workbench() {
     <article id="methods">
       <h2>Methods</h2>
       <p>This experiment asks how visual sequences can be represented as compact, multiband oscillatory templates for computational analysis.</p>
-      <h3>Visual features</h3><p>Each frame is resized to 64 × 64 and converted to grayscale. Eight measurements describe luminance, contrast, Canny edge density, low and high non-DC spatial FFT energy, center and peripheral luminance, and mean absolute frame difference. Three mean-centered, L1-normalized cosine–Gaussian kernels at scales 1, 2 and 3 produce eight temporal features by averaging the absolute filter responses. The workspace also displays the squared normalized FFT magnitude of the centered motion trajectory, using the input frame rate as the timebase.</p>
+      <h3>Visual features</h3><p>The browser decodes and resizes each frame to 64 × 64 before grayscale conversion. Codec, color conversion, and resampling can differ from the Python OpenCV pipeline. Video analysis uses uniformly spaced seek times at the configured rate. The analysis rate describes those sample times. Eight measurements describe luminance, contrast, Canny edge density, low and high non-DC spatial FFT energy, center and peripheral luminance, and mean absolute frame difference. Three mean-centered, L1-normalized cosine–Gaussian kernels at scales 1, 2 and 3 produce eight temporal features by averaging the absolute filter responses. The workspace also displays the squared normalized FFT magnitude of the centered motion trajectory, using the input frame rate as the timebase.</p>
       <h3>Deterministic mapping</h3><p>The 6, 10, 20 and 40 Hz bands use motion, brightness, contrast and the mean of edge density and high-frequency energy as respective power drivers. Each driver is scaled by 0.6, offset by 0.15 and multiplied by a channel gain from 0.8 to 1.2. Phase maps bounded motion, brightness, contrast and edge density linearly to [−π, π]. Spatial weights normalize a center–periphery mixture across channels.</p>
-      <h3>GRU and circular phase</h3><p>A 16-feature input projection with ReLU feeds a 64-unit GRU. Three heads emit nonnegative band power through softplus, normalized phase pairs converted to angles by atan2, and softmax channel weights. Phase error uses the mean of 1 − cos(Δφ) across the circular wrap. The held-out synthetic benchmark compares power MSE, circular phase error and spatial MSE against a constant predictor. An enabled checkpoint must improve all three metrics.</p>
+      <h3>GRU and circular phase</h3><p>A 16-feature input projection with ReLU feeds a 64-unit GRU. Three heads emit nonnegative band power through softplus, normalized phase pairs converted to angles by atan2, and softmax channel weights. Phase error uses the mean of 1 − cos(Δφ) across the circular wrap. The held-out synthetic benchmark compares power MSE, circular phase error and spatial MSE against a constant predictor. This benchmark and checkpoint-based comparisons are available in the local Python implementation.</p>
       <h3>Synthesis and interpretation</h3><p>For each input frame and channel, synthesis sums Pᵦ sin(2πfᵦt + φᵦ) over the fixed bands and multiplies by the channel weight. Template power is used as the amplitude coefficient by convention. Each frame creates an independent window. Phase is circular within the representation, and waveform continuity across windows is unconstrained.</p>
       <p>Evaluation measures reproduction of a synthetic deterministic teacher. Visual-to-oscillatory representations have not been validated as a means of delivering visual perception to the human brain. The workbench is computational only and produces simulated oscillations in arbitrary units.</p>
     </article>
