@@ -53,3 +53,33 @@ test('versioned calibration computes known ERP and rejects malformed feature blo
   model.blocks[0].scale[249] = 0;
   assert.throws(() => parseCalibration(JSON.stringify(model)), /valid COVE ERP calibration/);
 });
+
+test('field exports preserve the full clock, complex samples, graph, and sparse phase', async () => {
+  const {fieldJson, fieldCsv} = await import('../lib/cove-export.ts');
+  const analysis = analyzeCove(frames, 24, [2, 0], true);
+  const source = {kind:'images', fps:24, sampling:'filename-order', processed_frames_sha256:'a'.repeat(64)};
+  const report = JSON.parse(await fieldJson(analysis, source, [2, 0], null).text());
+  assert.equal(report.schema, 'cove-field-v1');
+  assert.deepEqual(report.internal_complex_shape, [25, 25, 4, 2]);
+  assert.equal(report.internal_first_time_s, 1/120);
+  assert.equal(report.internal_complex_flat.length, 5000);
+  const site12 = Array.from({length: 25}, (_, t) =>
+    report.internal_complex_flat.slice(t*200+12*8, t*200+13*8)).flat();
+  close(site12, reference.site_12_trace, 2e-8);
+  report.frames.forEach((frame, t) => {
+    assert.equal(frame.input_sample_time_s, t/24);
+    assert.equal(frame.state_time_s, (t+1)/24);
+    frame.spatial_weights.forEach(edges => close([edges.reduce((s,e)=>s+e.weight,0)], [1], 1e-12));
+    assert.ok(frame.spatial_dirichlet_energy.every(energy => energy >= 0));
+    const values = frame.states.flatMap(modes => modes.flatMap(({re,im})=>[re,im]));
+    close(values, report.internal_complex_flat.slice((t*5+4)*200, (t+1)*5*200), 0);
+  });
+  const csv = (await fieldCsv(analysis, source).text()).trim().split('\n');
+  assert.equal(csv.length, 501);
+  assert.equal(csv[0].split(',').length, 19);
+  assert.equal(csv[1].split(',').length, 19);
+  const still = analyzeCove(frames.slice(0,1), 7, [2,0], true);
+  const stillJson = JSON.parse(await fieldJson(still, {...source,fps:7}, [2,0], null).text());
+  assert.equal(stillJson.model_frame_rate_hz, 24);
+  assert.equal(stillJson.frames[0].state_time_s, 5/24);
+});

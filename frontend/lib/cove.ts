@@ -135,6 +135,11 @@ export function flattenCode(state: Complex[][]) {
   return state.flatMap(modes => [...modes.map(pair => pair[0]), ...modes.map(pair => pair[1])]);
 }
 
+export function crossMode(low: Complex, mode: number, amplitudeCoupling = true) {
+  return {shiftHz: 2.4 * mode * low[1] / (2 * Math.PI),
+    driveGain: amplitudeCoupling && mode > 0 ? 1 - .09*(1-low[0]) : 1};
+}
+
 export function analyzeCove(frames: Uint8Array[], fps: number, slopes = [2, 0], advanced = false) {
   if (frames.length === 1) fps = 24;
   const substeps = Math.ceil(100 / fps);
@@ -144,6 +149,9 @@ export function analyzeCove(frames: Uint8Array[], fps: number, slopes = [2, 0], 
   let state = sites.map(() => MODES.map<Complex>(() => [0, 0]));
   const internal: number[][] = [];
   const history: number[][] = [];
+  const stepsPerFrame = substeps * (frames.length === 1 ? 5 : 1);
+  const field = advanced ? new Float64Array(frames.length * stepsPerFrame * sites.length * MODES.length * 2) : undefined;
+  let cursor = 0;
   const rows = frames.map(rgb => {
     const image = gray(rgb);
     const smoothed = blur(image, blurHigh);
@@ -197,15 +205,21 @@ export function analyzeCove(frames: Uint8Array[], fps: number, slopes = [2, 0], 
       const [mr, mi] = mix(drive, i, m);
       return [.8*re + .2*mr, .8*im + .2*mi];
     }));
-    for (let step = 0; step < substeps * (frames.length === 1 ? 5 : 1); step++) {
+    for (let step = 0; step < stepsPerFrame; step++) {
       state = sites.map((_, i) => MODES.map((hz, m): Complex => {
-        const angle = dt * (2*Math.PI*hz + 2.4*state[i][0][1]*m);
+        const {shiftHz, driveGain: gate} = crossMode(state[i][0], m, advanced);
+        const angle = 2*Math.PI*dt * (hz + shiftHz);
         const [re, im] = mix(state, i, m);
-        const gate = advanced && m > 0 ? 1 - .18*(1-state[i][0][0])/2 : 1;
         return [retention*(re*Math.cos(angle) - im*Math.sin(angle)) + (1-retention)*gate*input[i][m][0],
           retention*(re*Math.sin(angle) + im*Math.cos(angle)) + (1-retention)*gate*input[i][m][1]];
       }));
-      internal.push(state.map(modes => modes.reduce((sum, [re]) => sum + re, 0)));
+      internal.push(state.map(modes => modes.reduce((sum, [re, im]) => {
+        if (field) {
+          field[cursor++] = re;
+          field[cursor++] = im;
+        }
+        return sum + re;
+      }, 0)));
     }
     const power = spatialPower(image);
     const spectrum = bandRms(power);
@@ -213,9 +227,9 @@ export function analyzeCove(frames: Uint8Array[], fps: number, slopes = [2, 0], 
     const conventional = sites.flatMap((_, i) => [brightness[i], contrast[i], motion[i], ...phaseChange[i],
       ...low[i].map(pair => Math.hypot(...pair)), ...high[i].map(pair => Math.hypot(...pair))]);
     const detail = sites.flatMap((_, i) => low[i].flatMap(([re, im], m) => [re, im, ...high[i][m]]));
-    return {brightness, contrast, drive, weights, state, spectrum, pixels, conventional, detail, wavelets};
+    return {brightness, contrast, drive, weights, state, spectrum, pixels, conventional, detail, wavelets, motion};
   });
-  return {rows, internal, internalRate: fps * substeps};
+  return {rows, internal, internalRate: fps * substeps, stepsPerFrame, modelFrameRate: fps, field};
 }
 
 export function spectrumWindowLength(length: number, hz: number) {

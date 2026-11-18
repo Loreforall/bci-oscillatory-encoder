@@ -142,7 +142,7 @@ def fit_coupling(visuals, penalty=.0002):
 
 
 def encode(visual, parameters=(2., 0.), fps=24, *, phase=True, spatial=True, cross=True,
-           advanced=False, hold=1, initial=None):
+           advanced=False, hold=1, initial=None, capture=None):
     """Unit-disk dynamics with contractive memory and interacting mode transport."""
     if not np.isfinite(fps) or fps <= 0 or not isinstance(hold, int) or hold < 1:
         raise ValueError("Positive finite FPS and positive integer hold are required")
@@ -168,6 +168,8 @@ def encode(visual, parameters=(2., 0.), fps=24, *, phase=True, spatial=True, cro
             # Higher-mode forcing is gated by the low-mode in-phase component.
             gate = 1 - gates * (1 - state[:, :1].real)
             state = retention * transport * (weight @ state) + (1 - retention) * gate * mixed_drive
+            if capture is not None:
+                capture(state.copy())
         states.append(state)
     return np.asarray(states)
 

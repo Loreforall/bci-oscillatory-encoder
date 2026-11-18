@@ -35,7 +35,7 @@ The GRU is trained to reproduce deterministic synthetic teacher targets, not rec
 
 ## Distributed COVE and EEG pilot
 
-The research branch adds a distributed complex encoder, a held-out two-participant THINGS-EEG2 benchmark, inverse reconstruction, and a simulated feedback study. The web workbench exposes an optional distributed analysis panel and can load a local still-image calibration. See the [advanced encoder and reproducibility guide](research/ADVANCED.md) and the [original pilot report](research/README.md).
+The research branch adds a distributed complex encoder, a held-out two-participant THINGS-EEG2 benchmark, inverse reconstruction, and a simulated feedback study. The web workbench exposes an optional distributed analysis panel and can load a local still-image calibration. See the [research methodology and contribution assessment](research/METHODOLOGY.md), [advanced mathematics and reproducibility guide](research/ADVANCED.md), [numerical export specification](research/EXPORTS.md), and [original pilot report](research/README.md).
 
 ## Data and safety
 

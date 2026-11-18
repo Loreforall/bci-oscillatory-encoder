@@ -1,28 +1,39 @@
 'use client';
 
 import { useMemo, useRef, useState } from 'react';
-import { analyzeCove, flattenCode, GRID, HAAR_SCALES, MODES, sites, spectrogram, spectrumWindowLength } from '../lib/cove';
+import { analyzeCove, crossMode, flattenCode, GRID, HAAR_SCALES, MODES, sites, spectrogram, spectrumWindowLength } from '../lib/cove';
 import { affine, type Calibration, ERP_BINS, parseCalibration, predictErp } from '../lib/cove-calibration';
 import { imageError, refineCode } from '../lib/cove-reconstruction';
+import { fieldCsv, fieldJson } from '../lib/cove-export';
+import type { Result } from '../lib/encoder';
 import renderer from '../lib/cove-decoder.json';
 
 const DEFAULT_SLOPES = [2, 2];
+function download(blob: Blob, name: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 const metric = (value: number) => Number(value.toPrecision(3)).toString();
 
 function Heatmap({title, rows, min, max, unit, grayscale = false}: {
-  title: string; rows: number[][]; min: number; max: number; unit: string; grayscale?: boolean;
+  title: string; rows: (number | null)[][]; min: number; max: number; unit: string; grayscale?: boolean;
 }) {
   const height = rows.length, width = rows[0]?.length ?? 0;
   return <figure className="cove-figure">
     <figcaption>{title}<span>{unit}</span></figcaption>
     {height ? <svg viewBox="0 0 210 130" role="img" aria-label={title} preserveAspectRatio="none">
       {rows.flatMap((row, y) => row.map((value, x) => {
-        const intensity = Math.min(1, Math.max(0, (value-min)/(max-min || 1)));
-        const fill = grayscale ? `hsl(0 0% ${100*intensity}%)` :
+        const intensity = value === null ? 0 : Math.min(1, Math.max(0, (value-min)/(max-min || 1)));
+        const fill = value === null ? '#30353c' : grayscale ? `hsl(0 0% ${100*intensity}%)` :
           `hsl(${195 - 155*intensity} 65% ${12+65*intensity}%)`;
         return <rect key={y*width+x} x={210*x/width} y={130*y/height} width={210/width+.1} height={130/height+.1}
           fill={fill}>
-          <title>{`Row ${y+1}, column ${x+1}: ${value.toPrecision(4)}`}</title>
+          <title>{`Row ${y+1}, column ${x+1}: ${value === null ? 'undefined phase' : value.toPrecision(4)}`}</title>
         </rect>;
       }))}
     </svg> : <p className="hint">Insufficient samples</p>}
@@ -46,11 +57,11 @@ function Trace({title, values, unit, start, end, extent}: {
   </figure>;
 }
 
-function grid(values: number[], width = GRID) {
+function grid(values: (number | null)[], width = GRID) {
   return Array.from({length: width}, (_, row) => values.slice(row * width, (row + 1) * width));
 }
 
-export default function CovePanel({frames, frame, fps}: {frames: Uint8Array[]; frame: number; fps: number}) {
+export default function CovePanel({frames, frame, source}: {frames: Uint8Array[]; frame: number; source: Result["input"]}) {
   const [model, setModel] = useState<Calibration>();
   const [error, setError] = useState('');
   const [site, setSite] = useState(12);
@@ -58,9 +69,11 @@ export default function CovePanel({frames, frame, fps}: {frames: Uint8Array[]; f
   const [scale, setScale] = useState(0);
   const [electrode, setElectrode] = useState(0);
   const fileVersion = useRef(0);
-  const activeModel = frames.length === 1 ? model : undefined;
+  const stillImage = source.kind === "images" && frames.length === 1;
+  const activeModel = stillImage ? model : undefined;
   const slopes = activeModel?.coupling ?? DEFAULT_SLOPES;
-  const {rows, internal, internalRate} = useMemo(() => analyzeCove(frames, fps, slopes, true), [frames, fps, slopes]);
+  const analysis = useMemo(() => analyzeCove(frames, source.fps, slopes, true), [frames, source.fps, slopes]);
+  const {rows, internal, internalRate} = analysis;
   const row = rows[frame];
   const windowStart = Math.floor(frame / 8) * 8;
   const reconstruction = useMemo(() => {
@@ -79,16 +92,19 @@ export default function CovePanel({frames, frame, fps}: {frames: Uint8Array[]; f
     const db = (value: number) => 10 * Math.log10(Math.max(1e-12, value));
     const bins = power[0]?.length ?? 0;
     const spectrum = Array.from({length: bins}, (_, k) => db(power.reduce((s, w) => s+w[k], 0) / power.length));
-    const spectrogramRows = Array.from({length: bins}, (_, k) => power.map(w => db(w[bins-1-k])));
+    const stride = Math.max(1, Math.ceil(power.length/240));
+    const spectrogramRows = Array.from({length: bins}, (_, k) =>
+      Array.from({length: Math.ceil(power.length/stride)}, (_, col) => {
+        const windows = power.slice(col*stride, (col+1)*stride);
+        return db(windows.reduce((sum, w) => sum+w[bins-1-k], 0)/windows.length);
+      }));
     const upperHz = (bins - 1) * internalRate / Math.max(1, spectrumWindowLength(signal.length, internalRate));
     return {signal, spectrogramRows, spectrum, upperHz};
   }, [internal, internalRate, site]);
   const spectrumPeak = Math.max(-119, ...spectrogramRows.flat());
   const magnitude = row.state.map(modes => Math.hypot(...modes[mode]));
-  const phase = row.state.map(modes => Math.hypot(...modes[mode]) > 1e-9 ? Math.atan2(modes[mode][1], modes[mode][0]) : 0);
-  const siteState = row.state[site][0];
-  const gate = mode === 0 ? 1 : 1 - .18 * (1-siteState[0])/2;
-  const shiftHz = 2.4 * mode * siteState[1] / (2*Math.PI);
+  const phase = row.state.map(modes => Math.hypot(...modes[mode]) > 1e-9 ? Math.atan2(modes[mode][1], modes[mode][0]) : null);
+  const {driveGain: gate, shiftHz} = crossMode(row.state[site][0], mode);
   const prediction = useMemo(() => {
     if (!activeModel) return {erp: [], legacy: []};
     const code = activeModel.schema === 'cove-erp-v1'
@@ -107,6 +123,13 @@ export default function CovePanel({frames, frame, fps}: {frames: Uint8Array[]; f
   return <section className="cove-panel" aria-label="Distributed COVE analysis">
     <h3>Distributed COVE <small>· simulated population activity</small></h3>
     <div className="cove-controls">
+      <button onClick={() => download(fieldJson(analysis, source, slopes, activeModel ? {
+        subject: activeModel.subject, channels: activeModel.channels,
+        onset_bin_centers_ms: Array.from({length: ERP_BINS}, (_, i) => 10+20*i),
+        prediction_scaled_csd_flat: prediction.erp,
+        held_out: activeModel.schema === 'cove-erp-v2' ? activeModel.held_out : null,
+      } : null), 'cove-field.json')}>Export COVE JSON</button>
+      <button onClick={() => download(fieldCsv(analysis, source), 'cove-frame-states.csv')}>Export COVE CSV</button>
       <label>Site <select value={site} onChange={event => setSite(Number(event.target.value))}>
         {sites.map((_, index) => <option key={index} value={index}>{index+1}</option>)}
       </select></label>
@@ -116,7 +139,7 @@ export default function CovePanel({frames, frame, fps}: {frames: Uint8Array[]; f
       <label>Haar scale <select value={scale} onChange={event => setScale(Number(event.target.value))}>
         {HAAR_SCALES.map((size, index) => <option key={size} value={index}>{size}+{size} frames</option>)}
       </select></label>
-      {frames.length === 1 && <label>ERP calibration JSON <input type="file" accept=".json,application/json" onChange={async event => {
+      {stillImage && <label>ERP calibration JSON <input type="file" accept=".json,application/json" onChange={async event => {
         const file = event.target.files?.[0];
         const version = ++fileVersion.current;
         setError('');
@@ -157,11 +180,11 @@ export default function CovePanel({frames, frame, fps}: {frames: Uint8Array[]; f
       <Heatmap title="Temporal Haar detail" rows={grid(row.wavelets.map(v => v[scale]))}
         min={-.25} max={.25} unit={frames.length === 1 ? 'Still input · zero detail' : 'Signed luminance change'}/>
       <Heatmap title="Population amplitude" rows={grid(magnitude)} min={0} max={Math.max(.01, ...magnitude)} unit="Frame-scaled a.u."/>
-      <Heatmap title="Population phase" rows={grid(phase)} min={-Math.PI} max={Math.PI} unit="−π to π rad"/>
+      <Heatmap title="Population phase" rows={grid(phase)} min={-Math.PI} max={Math.PI} unit="−π to π rad · gray if undefined"/>
       <Heatmap title="Incoming site weights" rows={grid(sites.map((_, i) =>
         row.weights[site].find(edge => edge.j === i)?.weight ?? 0))} min={0} max={1} unit="0–1"/>
       <Trace title="Modeled site waveform" values={signal} unit="Summed real state · a.u."
-        start="0 s" end={`${metric((signal.length-1)/internalRate)} s`}/>
+        start={`${metric(1/internalRate)} s`} end={`${metric(signal.length/internalRate)} s`}/>
       {spectrum.length > 0 && <Trace title="Modeled site frequency spectrum" values={spectrum} unit="Mean window power · dB"
         start="0 Hz" end={`${metric(upperHz)} Hz`}/>}
       <Heatmap title="Modeled site spectrogram" rows={spectrogramRows} min={spectrumPeak-50} max={spectrumPeak}
@@ -181,6 +204,6 @@ export default function CovePanel({frames, frame, fps}: {frames: Uint8Array[]; f
       {' '}{metric(100*activeModel.held_out.skill)}% MSE skill vs training mean · {activeModel.mode.replaceAll('_', ' ')}
     </p>}
     {activeModel && <p className="hint">ERP predictions are relative to still-image onset. Held-out metrics describe the calibration dataset.</p>}
-    {frames.length === 1 && !model && <p className="hint">Load an exported calibration to display the participant-specific ERP prediction.</p>}
+    {stillImage && !model && <p className="hint">Load an exported calibration to display the participant-specific ERP prediction.</p>}
   </section>;
 }

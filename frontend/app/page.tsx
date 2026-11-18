@@ -215,7 +215,7 @@ export default function Workbench() {
           <button type="button" aria-expanded={showCove} onClick={() => setShowCove(value => !value)}>
             {showCove ? 'Hide distributed COVE' : 'Inspect distributed COVE'}
           </button>
-          {showCove && <CovePanel frames={run.frames} frame={frame} fps={run.result.input.fps}/>}
+          {showCove && <CovePanel frames={run.frames} frame={frame} source={run.result.input}/>}
         </div>}
       </section>
       <aside aria-labelledby="inspector-title">

@@ -17,10 +17,13 @@ def main():
                          for t in range(5)], dtype=np.uint8)
     visual = extract(frames, 24)
     graph = coupling(visual.contrast, (2., 0.))
-    code = real_code(encode(visual, advanced=True))
+    samples = []
+    code = real_code(encode(visual, advanced=True, capture=samples.append))
+    trace = np.asarray(samples)[:, 12]
+    trace = np.stack([trace.real, trace.imag], axis=-1)
     renderer = json.loads((root / "frontend/lib/cove-decoder.json").read_text())
     refined = refine(code, visual.pixels, graph, renderer)
-    result = dict(spectrum=visual.spectrum.tolist(), haar=visual.wavelets[4, 12].tolist(),
+    result = dict(site_12_trace=trace.ravel().tolist(), spectrum=visual.spectrum.tolist(), haar=visual.wavelets[4, 12].tolist(),
                   code=code[4].tolist(), feature=visual.conventional[4].tolist(),
                   detail=visual.detail[4].tolist(), pixels=visual.pixels[4].tolist(),
                   reconstruction=(refined[4] @ np.asarray(renderer["weights"]) +
