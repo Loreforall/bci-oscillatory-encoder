@@ -40,8 +40,8 @@ function fft(real: Float64Array, imaginary: Float64Array) {
   }
 }
 
-function spatialEnergy(gray: Uint8Array) {
-  const real = Float64Array.from(gray, value => value / 255);
+export function spatialPower(gray: ArrayLike<number>, normalize = 1) {
+  const real = Float64Array.from(gray, value => value / normalize);
   const imaginary = new Float64Array(PIXELS);
   for (let y = 0; y < SIZE; y++) {
     const start = y * SIZE;
@@ -49,21 +49,27 @@ function spatialEnergy(gray: Uint8Array) {
   }
   const columnReal = new Float64Array(SIZE);
   const columnImaginary = new Float64Array(SIZE);
-  let low = 0;
-  let high = 0;
+  const power = new Float64Array(PIXELS);
   for (let x = 0; x < SIZE; x++) {
     for (let y = 0; y < SIZE; y++) {
       columnReal[y] = real[y * SIZE + x];
       columnImaginary[y] = imaginary[y * SIZE + x];
     }
     fft(columnReal, columnImaginary);
-    for (let y = 0; y < SIZE; y++) {
-      if (x === 0 && y === 0) continue;
-      const radius = Math.hypot(Math.min(x, SIZE - x), Math.min(y, SIZE - y)) / (SIZE / 2);
-      const power = columnReal[y] ** 2 + columnImaginary[y] ** 2;
-      if (radius <= 0.35) low += power;
-      else high += power;
-    }
+    for (let y = 0; y < SIZE; y++) power[y * SIZE + x] = columnReal[y] ** 2 + columnImaginary[y] ** 2;
+  }
+  power[0] = 0;
+  return power;
+}
+
+function spatialEnergy(gray: Uint8Array) {
+  const power = spatialPower(gray, 255);
+  let low = 0;
+  let high = 0;
+  for (let x = 0; x < SIZE; x++) for (let y = 0; y < SIZE; y++) {
+    const radius = Math.hypot(Math.min(x, SIZE - x), Math.min(y, SIZE - y)) / (SIZE / 2);
+    if (radius <= 0.35) low += power[y * SIZE + x];
+    else high += power[y * SIZE + x];
   }
   const total = low + high;
   return total < 1e-12 ? [0, 0] : [low / total, high / total];

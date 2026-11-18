@@ -1,5 +1,7 @@
 # Distributed oscillatory encoding and THINGS-EEG2 pilot
 
+The [advanced encoder report](ADVANCED.md) covers the current browser demonstration, hybrid ERP calibration, interacting dynamics, and inverse refinement. This page records the initial pilot and its original benchmarks.
+
 This study evaluates image-to-EEG prediction and visual representation in software. COVE models complex states at 25 retinotopic sampling sites; its modeled phase, frequencies, and coupling describe the encoder. EEG is used as an observational regression target. The simulated feedback experiment updates a readout against software-generated observations.
 
 ## Reproduce

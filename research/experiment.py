@@ -1,7 +1,7 @@
 """Sequence/stimulus-disjoint benchmarks and target-free inverse refinement."""
 import numpy as np
 
-from .cove import GRID, FREQUENCIES, Visual, coupling, encode, fit_coupling, real_code
+from .cove import GRID, FREQUENCIES, coupling, encode, fit_coupling, real_code
 
 
 def penalties(x):
@@ -101,14 +101,11 @@ def design(visuals, parameters, fps, mode):
     codes = []
     for visual in visuals:
         static = len(visual.drive) == 1
-        if static:
-            visual = Visual(np.repeat(visual.drive, 5, axis=0),
-                            np.repeat(visual.contrast, 5, axis=0),
-                            visual.conventional, visual.pixels)
         code = real_code(encode(visual, parameters if mode != "fixed" else (2., 0.), fps,
                                 phase=mode != "no_phase", spatial=mode != "no_spatial",
-                                cross=mode != "no_cross"))
-        codes.append(code[-1:] if static else code)
+                                cross=mode != "no_cross", hold=5 if static else 1,
+                                advanced=mode == "advanced"))
+        codes.append(code)
     return codes
 
 

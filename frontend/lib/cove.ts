@@ -1,6 +1,8 @@
-import { SIZE } from './features.ts';
+import { SIZE, spatialPower } from './features.ts';
 
 export const GRID = 5;
+export const HAAR_SCALES = [1, 2, 4];
+export const FOURIER_EDGES = [.0625, .125, .25];
 export const MODES = [6, 10, 20, 40];
 const axis = Array.from({length: GRID}, (_, i) => 2 * i / (GRID - 1) - 1);
 export const sites = axis.flatMap(y => axis.map(x => {
@@ -21,7 +23,7 @@ function edge(x: number) {
 function gray(rgb: Uint8Array) {
   const data = new Float64Array(SIZE * SIZE);
   for (let i = 0; i < data.length; i++) {
-    data[i] = Math.round(.299 * rgb[3*i] + .587 * rgb[3*i+1] + .114 * rgb[3*i+2]) / 255;
+    data[i] = ((9798*rgb[3*i] + 19235*rgb[3*i+1] + 3735*rgb[3*i+2] + 16384) >> 15) / 255;
   }
   return data;
 }
@@ -105,7 +107,35 @@ function response(image: Float64Array, site: number, filter: number): Complex {
   return [real, imag];
 }
 
-export function analyzeCove(frames: Uint8Array[], fps: number, slopes = [2, 0]) {
+const pixelTaps = Array.from({length: 12}, (_, pixel) => {
+  const from = pixel * SIZE / 12, to = (pixel + 1) * SIZE / 12;
+  return Array.from({length: Math.ceil(to) - Math.floor(from)}, (_, i) => {
+    const index = Math.floor(from) + i;
+    return {index, weight: (Math.min(to, index + 1) - Math.max(from, index)) * 12 / SIZE};
+  });
+});
+
+function areaPixels(image: Float64Array) {
+  return pixelTaps.flatMap(y => pixelTaps.map(x => y.reduce((total, row) =>
+    total + row.weight * x.reduce((sum, col) => sum + col.weight*image[row.index*SIZE + col.index], 0), 0)));
+}
+
+function bandRms(power: Float64Array) {
+  const energy = [0, 0, 0, 0];
+  power.forEach((value, i) => {
+    const x = i % SIZE, y = Math.floor(i / SIZE);
+    const radius = Math.hypot(Math.min(x, SIZE-x), Math.min(y, SIZE-y)) / SIZE;
+    const band = FOURIER_EDGES.filter(bound => radius >= bound).length;
+    energy[band] += value;
+  });
+  return energy.map(value => Math.sqrt(value) / SIZE**2);
+}
+
+export function flattenCode(state: Complex[][]) {
+  return state.flatMap(modes => [...modes.map(pair => pair[0]), ...modes.map(pair => pair[1])]);
+}
+
+export function analyzeCove(frames: Uint8Array[], fps: number, slopes = [2, 0], advanced = false) {
   if (frames.length === 1) fps = 24;
   const substeps = Math.ceil(100 / fps);
   const dt = 1 / (fps * substeps);
@@ -113,6 +143,7 @@ export function analyzeCove(frames: Uint8Array[], fps: number, slopes = [2, 0]) 
   let previous: {brightness: number[]; low: Complex[][]} | undefined;
   let state = sites.map(() => MODES.map<Complex>(() => [0, 0]));
   const internal: number[][] = [];
+  const history: number[][] = [];
   const rows = frames.map(rgb => {
     const image = gray(rgb);
     const smoothed = blur(image, blurHigh);
@@ -124,17 +155,33 @@ export function analyzeCove(frames: Uint8Array[], fps: number, slopes = [2, 0]) 
     const contrast = sites.map((_, i) => Math.sqrt(Math.max(0, sample(variance, i))));
     const low = sites.map((site, i) => MODES.map((_, m) => response(image, i, m)
       .map(v => v / ((.15 + contrast[i]) * (1 + site.eccentricity**2))) as Complex));
-    const drive = sites.map((site, i) => MODES.map((_, m): Complex => {
-      const [hr, hi] = response(highpass, i, m + 4);
-      const attenuation = (.15 + contrast[i]) * (1 + 5 * site.eccentricity**2);
-      const [lr, li] = low[i][m];
+    history.push(brightness);
+    const index = history.length - 1;
+    const wavelets = sites.map((_, i) => HAAR_SCALES.map(size => {
+      let difference = 0;
+      for (let lag = 0; lag < size; lag++) {
+        difference += history[Math.max(0, index-lag)][i] - history[Math.max(0, index-lag-size)][i];
+      }
+      return difference / (Math.SQRT2 * size);
+    }));
+    const high = sites.map((site, i) => MODES.map((_, m) => response(highpass, i, m + 4)
+      .map(v => v / ((.15 + contrast[i]) * (1 + 5*site.eccentricity**2))) as Complex));
+    const motion = brightness.map((value, i) => previous ? Math.tanh((value - previous.brightness[i]) * fps / 12) : 0);
+    const phaseChange = low.map((modes, i) => modes.map(([lr, li], m) => {
       const [pr, pi] = previous?.low[i][m] ?? [0, 0];
-      const temporal = (li*pr - lr*pi) / (.1 + Math.hypot(lr, li)*Math.hypot(pr, pi));
-      const motion = previous ? Math.tanh((brightness[i] - previous.brightness[i]) * fps / 12) : 0;
-      const re = .5*lr + .25*hr/attenuation + .15*(brightness[i] - .5) + .1*motion;
-      const im = .5*li + .25*hi/attenuation + .1*temporal;
+      return (li*pr - lr*pi) / (.1 + Math.hypot(lr, li)*Math.hypot(pr, pi));
+    }));
+    const drive = sites.map((site, i) => MODES.map((_, m): Complex => {
+      const [hr, hi] = high[i][m];
+      const [lr, li] = low[i][m];
+      const re = .5*lr + .25*hr + .15*(brightness[i] - .5) + .1*motion[i];
+      const im = .5*li + .25*hi + .1*phaseChange[i][m];
       const gain = 1 + Math.hypot(re, im);
-      return [re/gain, im/gain];
+      const [fast, medium, slow] = wavelets[i];
+      const correction = advanced ? .25 * [slow, medium, fast, fast-medium][m] : 0;
+      const r = re/gain, q = im/gain + correction;
+      const bounded = Math.max(1, Math.hypot(r, q));
+      return [r/bounded, q/bounded];
     }));
     previous = {brightness, low};
     const weights = neighbors.map((edges, i) => {
@@ -154,18 +201,29 @@ export function analyzeCove(frames: Uint8Array[], fps: number, slopes = [2, 0]) 
       state = sites.map((_, i) => MODES.map((hz, m): Complex => {
         const angle = dt * (2*Math.PI*hz + 2.4*state[i][0][1]*m);
         const [re, im] = mix(state, i, m);
-        return [retention*(re*Math.cos(angle) - im*Math.sin(angle)) + (1-retention)*input[i][m][0],
-          retention*(re*Math.sin(angle) + im*Math.cos(angle)) + (1-retention)*input[i][m][1]];
+        const gate = advanced && m > 0 ? 1 - .18*(1-state[i][0][0])/2 : 1;
+        return [retention*(re*Math.cos(angle) - im*Math.sin(angle)) + (1-retention)*gate*input[i][m][0],
+          retention*(re*Math.sin(angle) + im*Math.cos(angle)) + (1-retention)*gate*input[i][m][1]];
       }));
       internal.push(state.map(modes => modes.reduce((sum, [re]) => sum + re, 0)));
     }
-    return {brightness, contrast, drive, weights, state};
+    const power = spatialPower(image);
+    const spectrum = bandRms(power);
+    const pixels = areaPixels(image);
+    const conventional = sites.flatMap((_, i) => [brightness[i], contrast[i], motion[i], ...phaseChange[i],
+      ...low[i].map(pair => Math.hypot(...pair)), ...high[i].map(pair => Math.hypot(...pair))]);
+    const detail = sites.flatMap((_, i) => low[i].flatMap(([re, im], m) => [re, im, ...high[i][m]]));
+    return {brightness, contrast, drive, weights, state, spectrum, pixels, conventional, detail, wavelets};
   });
   return {rows, internal, internalRate: fps * substeps};
 }
 
+export function spectrumWindowLength(length: number, hz: number) {
+  return Math.min(length, Math.round(.25 * hz));
+}
+
 export function spectrogram(signal: number[], hz: number) {
-  const size = Math.min(signal.length, Math.round(.25 * hz));
+  const size = spectrumWindowLength(signal.length, hz);
   if (size < 4) return [];
   const hop = Math.max(1, Math.round(size / 2));
   return Array.from({length: 1 + Math.floor((signal.length - size) / hop)}, (_, column) =>
