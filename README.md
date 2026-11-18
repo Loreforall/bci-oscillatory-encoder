@@ -33,6 +33,10 @@ python -m pytest -q
 
 The GRU is trained to reproduce deterministic synthetic teacher targets, not recorded EEG or visual percepts. Comparison with a constant predictor is a *software-learning sanity check*, not a claim of neural encoding performance.
 
+## Distributed COVE and EEG pilot
+
+The research branch adds a distributed complex encoder, a held-out two-participant THINGS-EEG2 benchmark, inverse reconstruction, and a simulated feedback study. The web workbench exposes an optional distributed analysis panel and can load a local still-image calibration. See the [research report and reproducibility guide](research/README.md).
+
 ## Data and safety
 
 No stimulation waveforms, tACS/TMS/tFUS parameters, device-control instructions or claims of brain entrainment are provided. Generated waveforms are visualization-only, in arbitrary units. Avoid uploading sensitive video. The original Gradio app writes transient export files to the host's temporary directory; configure cleanup and retention before public launch.

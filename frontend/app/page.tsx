@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { analyze, type Input, type Result } from '../lib/encoder';
 import { readInput } from '../lib/media';
+import CovePanel from './cove-panel';
 import { SIZE } from '../lib/features';
 
 const email = process.env.NEXT_PUBLIC_RESEARCH_EMAIL;
@@ -95,6 +96,7 @@ export default function Workbench() {
   const [band, setBand] = useState(0);
   const [frame, setFrame] = useState(0);
   const [feature, setFeature] = useState(0);
+  const [showCove, setShowCove] = useState(false);
 
   async function encode(event: FormEvent) {
     event.preventDefault();
@@ -117,7 +119,7 @@ export default function Workbench() {
 
   function reset() {
     setKind('synthetic'); setChannels(8); setFps(24); setVideoFps(12); setSampleRate(250);
-    setFiles([]); setRun(undefined); setError(''); setFormVersion(version => version + 1);
+    setShowCove(false); setFiles([]); setRun(undefined); setError(''); setFormVersion(version => version + 1);
     setChannel(0); setBand(0); setFrame(0); setFeature(0);
   }
 
@@ -209,6 +211,12 @@ export default function Workbench() {
           <Plot title="Visual feature trajectory" step={step} unit="Input time (s)" valueUnit="Normalized feature" traces={result ? [
             {label: result.feature_names[feature], values: result.features.map(row => row[feature])}] : []}/>
         </div>
+        {run && <div className="cove-extension">
+          <button type="button" aria-expanded={showCove} onClick={() => setShowCove(value => !value)}>
+            {showCove ? 'Hide distributed COVE' : 'Inspect distributed COVE'}
+          </button>
+          {showCove && <CovePanel frames={run.frames} frame={frame} fps={run.result.input.fps}/>}
+        </div>}
       </section>
       <aside aria-labelledby="inspector-title">
         <h2 id="inspector-title">03 / Run inspection</h2>

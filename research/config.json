@@ -1,0 +1,9 @@
+{
+  "split_seeds": [17, 29, 43],
+  "synthetic_generator_seed": 20261118,
+  "synthetic_sequences": 60,
+  "synthetic_frames": 12,
+  "fps": 24,
+  "feedback_delays_frames": [0, 3, 8],
+  "feedback_noise_sd": [0.0, 0.08, 0.25]
+}
