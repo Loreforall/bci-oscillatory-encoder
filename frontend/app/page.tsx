@@ -1,10 +1,10 @@
 'use client';
 
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, useRef, useState } from 'react';
 import { analyze, type Input, type Result } from '../lib/encoder';
 import { readInput } from '../lib/media';
 import CovePanel from './cove-panel';
-import { SIZE } from '../lib/features';
+import FramePreview from './frame-preview';
 
 const email = process.env.NEXT_PUBLIC_RESEARCH_EMAIL;
 const format = (n: number) => Number(n.toPrecision(5)).toString();
@@ -44,21 +44,6 @@ function Plot({ title, traces = [], step = 1, unit, valueUnit, range }: {
   </figure>;
 }
 
-function FramePreview({ rgb }: { rgb: Uint8Array }) {
-  const canvas = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    const context = canvas.current?.getContext('2d');
-    if (!context) return;
-    const image = context.createImageData(SIZE, SIZE);
-    for (let i = 0; i < SIZE * SIZE; i++) {
-      image.data.set(rgb.subarray(i * 3, i * 3 + 3), i * 4);
-      image.data[i * 4 + 3] = 255;
-    }
-    context.putImageData(image, 0, 0);
-  }, [rgb]);
-  return <canvas ref={canvas} width={SIZE} height={SIZE} role="img" aria-label="Processed RGB input frame"/>;
-}
-
 function save(filename: string, type: string, body: string) {
   const url = URL.createObjectURL(new Blob([body], {type}));
   const link = document.createElement('a');
@@ -87,7 +72,7 @@ export default function Workbench() {
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [run, setRun] = useState<{ result: Result; frames: Uint8Array[]; elapsedMs: number }>();
+  const [run, setRun] = useState<{ result: Result; frames: Uint8Array[]; elapsedMs: number; id: number }>();
   const [formVersion, setFormVersion] = useState(0);
   const methods = useRef<HTMLDialogElement>(null);
   const verification = useRef<HTMLDialogElement>(null);
@@ -108,7 +93,8 @@ export default function Workbench() {
       await new Promise<void>(resolve => setTimeout(resolve, 0));
       const { frames, input } = await readInput(kind, files, kind === 'video' ? videoFps : fps);
       const result = await analyze(frames, input, channels, sampleRate);
-      setRun({result, frames, elapsedMs: performance.now() - start});
+      const elapsedMs = performance.now() - start;
+      setRun(previous => ({result, frames, elapsedMs, id: (previous?.id ?? 0) + 1}));
       setChannel(0); setBand(0); setFrame(0); setFeature(0);
     } catch (problem) {
       setError(problem instanceof Error ? problem.message : 'Local processing failed.');
@@ -190,6 +176,12 @@ export default function Workbench() {
       </aside>
       <section className="visual" aria-labelledby="analysis-title">
         <h2 id="analysis-title">02 / Signal analysis <small>{result ? `FRAME ${frame + 1} / ${result.input.frames}` : 'AWAITING RUN'}</small></h2>
+        {run && <div className="cove-extension">
+          <button type="button" aria-expanded={showCove} onClick={() => setShowCove(value => !value)}>
+            {showCove ? 'Hide distributed COVE' : 'Inspect distributed COVE'}
+          </button>
+          {showCove && <CovePanel key={run.id} frames={run.frames} frame={frame} onFrameChange={setFrame} source={run.result.input}/>}
+        </div>}
         <div className="plot-grid">
           <section className="preview" aria-label="Visual input preview">
             <h3>Visual input <span>64 × 64 RGB</span></h3>
@@ -211,12 +203,7 @@ export default function Workbench() {
           <Plot title="Visual feature trajectory" step={step} unit="Input time (s)" valueUnit="Normalized feature" traces={result ? [
             {label: result.feature_names[feature], values: result.features.map(row => row[feature])}] : []}/>
         </div>
-        {run && <div className="cove-extension">
-          <button type="button" aria-expanded={showCove} onClick={() => setShowCove(value => !value)}>
-            {showCove ? 'Hide distributed COVE' : 'Inspect distributed COVE'}
-          </button>
-          {showCove && <CovePanel frames={run.frames} frame={frame} source={run.result.input}/>}
-        </div>}
+
       </section>
       <aside aria-labelledby="inspector-title">
         <h2 id="inspector-title">03 / Run inspection</h2>

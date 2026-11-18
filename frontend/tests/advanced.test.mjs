@@ -83,3 +83,14 @@ test('field exports preserve the full clock, complex samples, graph, and sparse 
   assert.equal(stillJson.model_frame_rate_hz, 24);
   assert.equal(stillJson.frames[0].state_time_s, 5/24);
 });
+
+test('playback follows the full-rate clock and the source-frame hold', async () => {
+  const {playbackSample, playbackFrame} = await import('../lib/cove-playback.ts');
+  const first = playbackSample(0, 41, 120, 240);
+  assert.equal(first, 4);
+  assert.equal(playbackFrame(first, 5), 0);
+  assert.equal(playbackFrame(playbackSample(0, 42, 120, 240), 5), 1);
+  assert.equal(playbackSample(6, 25, 120, 240), 9);
+  assert.equal(playbackSample(6, 4000, 120, 240), 239);
+  assert.equal(playbackFrame(24, 25), 0);
+});
