@@ -79,6 +79,8 @@ function corners(site: typeof sites[number]) {
     {x: x0, y: y0+1, weight: (1-dx)*dy}, {x: x0+1, y: y0+1, weight: dx*dy}].filter(c => c.weight);
 }
 const interpolation = sites.map(corners);
+export const samplingTaps = (site: number) => interpolation[site];
+
 const taps = interpolation.map(patch => patch.map(corner => ({
   weight: corner.weight,
   indices: Array.from({length: 225}, (_, i) => edge(corner.y + Math.floor(i / 15) - 7) * SIZE

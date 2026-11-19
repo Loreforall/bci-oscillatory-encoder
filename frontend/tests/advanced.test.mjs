@@ -120,3 +120,26 @@ test('the neighborhood photograph drives a held input response in all four modes
     assert.ok(Math.max(...trace)-Math.min(...trace)>1e-6);
   }
 });
+
+test('visualization projections preserve complex samples, graph weights and circular phase', async () => {
+  const {modeTrajectory, spatialMatrix, phaseDifference} = await import('../lib/cove-visualization.ts');
+  const {samplingTaps} = await import('../lib/cove.ts');
+  const analysis = analyzeCove(frames, 24, [2,2], true);
+  for (const site of [0,12,24]) {
+    assert.ok(Math.abs(samplingTaps(site).reduce((sum,tap)=>sum+tap.weight,0)-1)<1e-12);
+    const trace=modeTrajectory(analysis.field,site,2);
+    assert.equal(trace.length,analysis.internal.length);
+    analysis.rows.forEach((row,i)=>{
+      const point=trace[(i+1)*analysis.stepsPerFrame-1];
+      const [re,im]=row.state[site][2];
+      assert.deepEqual([point.real,point.imaginary],[re,im]);
+      assert.equal(point.amplitude,Math.hypot(re,im));
+    });
+  }
+  const weights=analysis.rows[0].weights;
+  const matrix=spatialMatrix(weights);
+  assert.ok(matrix.every(row=>Math.abs(row.reduce((a,b)=>a+b,0)-1)<1e-12));
+  weights.forEach((edges,i)=>edges.forEach(e=>assert.equal(matrix[i][e.j],e.weight)));
+  assert.ok(Math.abs(phaseDifference(Math.PI-.1,-Math.PI+.1)+.2)<1e-12);
+  assert.equal(phaseDifference(null,0),null);
+});
