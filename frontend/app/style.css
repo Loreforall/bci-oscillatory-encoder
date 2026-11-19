@@ -127,3 +127,53 @@ dialog h2 { position: sticky; top: 0; }
   .cove-hero-grid .frame-view { height:230px; }
   .cove-hero-grid .frame-view canvas { width:210px; }
 }
+
+.demo-home { max-width:1240px; padding-top:28px; }
+.demo-intro { margin-bottom:16px; }
+.demo-intro h1 { font-size:clamp(28px,4vw,44px); letter-spacing:-.035em; line-height:1.1; }
+.demo-intro p { font-size:15px; }
+.demo-intro .research-label { font:700 11px var(--mono); letter-spacing:.1em; color:#246184; margin-bottom:9px; }
+.demo-intro a { color:#174e78; font-size:13px; }
+.cove-hero-grid { grid-template-columns:minmax(0,1.06fr) minmax(0,1fr); gap:16px; align-items:start; }
+.neighborhood-photo img { display:block; width:100%; height:auto; }
+.photo-credit { margin:0; padding:7px 10px; font-size:11px; color:var(--muted); }
+.photo-credit a { color:var(--blue); }
+.cove-hero-output { gap:6px; }
+.wave-heading { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:4px 0; }
+.wave-heading h2 { flex:1; position:static; background:none; border:0; padding:0; }
+.mode-traces { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
+.mode-traces:has(> :only-child), .mode-traces.expanded { grid-template-columns:1fr; }
+.mode-traces .cove-figure svg { height:clamp(95px,11vw,145px); }
+.mode-traces.expanded .cove-figure svg { height:190px; }
+.landing-spatial { margin:22px 0; display:grid; grid-template-columns:minmax(210px,325px) minmax(0,1fr); gap:20px; align-items:center; }
+.landing-spatial h2, .demo-upload-section h2, .public-science-title, .research-overview h2 { position:static; color:var(--ink); font:bold 21px Arial,sans-serif; background:none; border:0; padding:0; text-transform:none; }
+.landing-spatial p, .drop-area p { color:var(--muted); }
+.activity-viz svg { height:185px; background:#e8f1f8; }
+.field-legend { display:flex; align-items:center; gap:6px; padding:0 7px; font-size:11px; }
+.field-legend span { width:42px; height:8px; background:linear-gradient(90deg,#e5f2fb,#198e85); }
+.demo-upload-section { margin:24px 0; }
+.drop-area { border:2px dashed #81a3bf; background:#e8f2fa; padding:18px; margin-top:8px; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; justify-content:space-between; }
+.drop-area.dragging { background:#cfe7f6; border-color:#1e638c; }
+.drop-area p { margin:3px 0; }
+.public-science-title { margin:28px 0 6px; }
+.demo-home .plot-grid { padding:0; gap:8px; }
+.demo-home .plot-grid svg { height:150px; }
+.research-overview { border-top:2px solid #8dabbe; margin-top:34px; padding:22px 0; font-size:14px; line-height:1.55; }
+.research-overview section { margin-top:18px; }
+.research-overview h3 { font:700 16px Arial,sans-serif; text-transform:none; }
+.research-overview p { margin:6px 0 9px; max-width:82ch; }
+.research-text, .research-results { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 22px; }
+.research-pipeline { list-style:none; margin:12px 0 5px; padding:0; display:flex; flex-wrap:wrap; gap:6px; }
+.research-pipeline li, .research-outputs span { background:#dfeefa; border:1px solid #a7c2d6; padding:7px 10px; }
+.research-pipeline li:not(:last-child)::after { content:" →"; color:#286489; }
+.research-outputs { display:flex; gap:6px; flex-wrap:wrap; font-size:12px; }
+.research-outputs span { background:#f6fafc; }
+.research-benchmark { font-size:12px; }
+.research-benchmark table { border-collapse:collapse; width:100%; }
+.research-benchmark th,.research-benchmark td { text-align:left; padding:6px; border-bottom:1px solid #e1eaf1; }
+.research-benchmark td { position:relative; isolation:isolate; min-width:65px; }
+.research-bar { position:absolute; z-index:-1; inset:4px auto 4px 0; background:#d8ebf8; }
+.research-benchmark td:last-child .research-bar { background:#d8eeed; }
+@media (max-width:760px) { .research-text,.research-results { grid-template-columns:1fr; } .research-results { gap:10px; } }
+@media (max-width:640px) { .cove-hero-grid,.landing-spatial { grid-template-columns:1fr; } .demo-home { padding-top:16px; } }
+.intro-links { display:flex; gap:12px; flex-wrap:wrap; }

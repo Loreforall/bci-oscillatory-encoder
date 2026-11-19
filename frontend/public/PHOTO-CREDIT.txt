@@ -1,0 +1,5 @@
+Neighborhood photograph by PattayaPatrol.
+Source: https://commons.wikimedia.org/wiki/File:DFC_2054_A_quiet_narrow_neighborhood_street_lined_with_trees_and_parked_cars_sunlight_filtering_through_the_greenery.jpg
+Photograph and resized derivatives: Creative Commons Attribution ShareAlike 4.0 International.
+License: https://creativecommons.org/licenses/by-sa/4.0/
+Changes: reduced to 1280 pixels wide and reencoded as JPEG. The encoder's 64 by 64 RGB raster is area resized from that saved JPEG.

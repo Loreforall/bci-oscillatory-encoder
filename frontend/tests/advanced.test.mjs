@@ -106,3 +106,17 @@ test('the landing example has reproducible, nonzero time-varying COVE output', a
   assert.ok(field.field.some(value => Math.abs(value) > 0.01));
   assert.notDeepEqual(field.rows[0].state, field.rows[1].state);
 });
+
+test('the neighborhood photograph drives a held input response in all four modes', async () => {
+  const {neighborhoodInput} = await import('../lib/cove-example.ts');
+  const bytes = Buffer.from(JSON.parse(readFileSync(new URL('../lib/neighborhood-rgb.json', import.meta.url))), 'base64');
+  assert.equal(bytes.length, 64 * 64 * 3);
+  const {internal, field, stepsPerFrame, rows} = analyzeCove([bytes], neighborhoodInput.fps, [2, 2], true);
+  assert.equal(stepsPerFrame, 25);
+  assert.equal(internal.length, 25);
+  assert.ok(rows[0].wavelets.flat().every(value => value === 0));
+  for(let mode=0; mode<4; mode++) {
+    const trace = internal.map((_, step) => field[(step*100+12*4+mode)*2]);
+    assert.ok(Math.max(...trace)-Math.min(...trace)>1e-6);
+  }
+});

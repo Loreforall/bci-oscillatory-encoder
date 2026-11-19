@@ -46,7 +46,7 @@ function waitForVideo(video: HTMLVideoElement, event: 'loadeddata' | 'seeked', s
   });
 }
 
-export async function readInput(kind: Input['kind'], files: File[], fps: number) {
+export async function readInput(kind: Input['kind'], files: File[], fps: number, progress?: (done: number, total: number) => void) {
   const frames: Uint8Array[] = [];
   const readFrame = frameReader();
   if (kind === 'synthetic') {
@@ -122,6 +122,7 @@ export async function readInput(kind: Input['kind'], files: File[], fps: number)
         throw new Error('Video resolution must remain constant.');
       }
       frames.push(readFrame(video));
+      progress?.(i + 1, count);
     }
     const input: Input = {kind, width, height, fps, sampling: 'uniform-browser-seek', duration_seconds: duration};
     return {frames, input};

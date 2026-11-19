@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { analyzeCove, crossMode, flattenCode, GRID, HAAR_SCALES, MODES, sites, spectrogram, spectrumWindowLength } from '../lib/cove';
 import { affine, type Calibration, ERP_BINS, parseCalibration, predictErp } from '../lib/cove-calibration';
 import { imageError, refineCode } from '../lib/cove-reconstruction';
@@ -11,8 +11,39 @@ import FramePreview from './frame-preview';
 import renderer from '../lib/cove-decoder.json';
 
 function InputPreview({rgb, fallback, label}: {rgb: Uint8Array; fallback?: boolean; label?: string}) {
-  return <figure className="cove-figure"><figcaption>Visual input <span>{label ?? "Processed RGB"}</span></figcaption>
-    <div className={fallback ? "frame-view cove-example-fallback" : "frame-view"}><FramePreview rgb={rgb} label="Current visual input"/></div>
+  return <figure className={fallback ? "cove-figure neighborhood-photo" : "cove-figure"}><figcaption>Visual input <span>{label ?? "Processed RGB"}</span></figcaption>
+    {fallback ? <>
+      {/* Local photograph and its encoder raster are derived from the same saved JPEG. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src="/neighborhood.jpg" width={1280} height={853} alt="Daylight on a residential street with trees, houses and parked cars"/>
+      <p className="photo-credit"><a href="https://commons.wikimedia.org/wiki/File:DFC_2054_A_quiet_narrow_neighborhood_street_lined_with_trees_and_parked_cars_sunlight_filtering_through_the_greenery.jpg">PattayaPatrol</a>
+        {' · '}<a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY SA 4.0</a> · resized for this demonstration</p>
+    </> : <div className="frame-view"><FramePreview rgb={rgb} label="Current visual input"/></div>}
+  </figure>;
+}
+
+const modeColors = ['#176890', '#6150a0', '#087f79', '#9a4d1f'];
+const fieldGrid = Array.from({length: 18**2}, (_, i) => {
+  const x = (i%18+.5)*64/18, y = (Math.floor(i/18)+.5)*64/18;
+  const weights = sites.map(site => 1/(4+(site.x+.5-x)**2+(site.y+.5-y)**2));
+  const mass = weights.reduce((sum,w) => sum+w,0);
+  return weights.map(w => w/mass);
+});
+
+function Activity({amplitudes, peak, site}: {amplitudes: number[]; peak: number; site: number}) {
+  return <figure className="cove-figure activity-viz"><figcaption>Retinotopic activity<span>Amplitude · 25 computed sites</span></figcaption>
+    <svg viewBox="0 0 64 64" role="img" aria-label="Interpolated activity with 25 computed retinotopic sites">
+      {fieldGrid.map((weights, i) => {
+        const level = Math.min(1, weights.reduce((sum,w,j) => sum+w*amplitudes[j],0)/peak);
+        return <rect key={i} x={i%18*64/18} y={Math.floor(i/18)*64/18} width={64/18+.06} height={64/18+.06}
+          fill={`hsl(${204-32*level} 70% ${94-58*level}%)`}/>;
+      })}
+      {sites.map((point,i) => <circle key={i} cx={point.x+.5} cy={point.y+.5} r={i === site ? 1.65 : .86}
+        fill={i === site ? '#132c46' : '#fff'} stroke="#244763" strokeWidth=".45">
+        <title>{`Site ${i+1} · ${metric(amplitudes[i])} a.u.`}</title>
+      </circle>)}
+    </svg>
+    <p className="field-legend"><span aria-hidden="true"/>0 to {metric(peak)} a.u. · interpolated color, computed dots</p>
   </figure>;
 }
 
@@ -48,8 +79,8 @@ const Heatmap = memo(function Heatmap({title, rows, min, max, unit, grayscale = 
   </figure>;
 });
 
-function Trace({title, values, unit, start, end, extent, cursor}: {
-  title: string; values: number[]; unit: string; start: string; end: string; extent?: [number, number]; cursor?: number;
+function Trace({title, values, unit, start, end, extent, cursor, color}: {
+  title: string; values: number[]; unit: string; start: string; end: string; extent?: [number, number]; cursor?: number; color?: string;
 }) {
   const loLimit = extent?.[0], hiLimit = extent?.[1];
   const {lo, hi, span, points} = useMemo(() => {
@@ -62,7 +93,7 @@ function Trace({title, values, unit, start, end, extent, cursor}: {
   return <figure className="cove-figure"><figcaption>{title}<span>{unit}</span></figcaption>
     <svg viewBox="0 0 210 130" role="img" aria-label={title}>
       <path className="axes" d="M29 12V105H200"/>
-      <polyline className="trace t0" points={points}/>
+      <polyline className="trace t0" style={{color}} points={points}/>
       {cursor !== undefined && <g><line className="cove-cursor" x1={29+171*cursor/Math.max(1,values.length-1)}
         x2={29+171*cursor/Math.max(1,values.length-1)} y1="12" y2="105"/>
         <circle cx={29+171*cursor/Math.max(1,values.length-1)} cy={105-93*(values[cursor]-lo)/span} r="3" fill="#8b4b1a"/></g>}
@@ -79,9 +110,11 @@ function grid(values: (number | null)[], width = GRID) {
 
 export default function CovePanel({frames, frame, source, onFrameChange, home, startAdvanced}: {
   frames: Uint8Array[]; frame: number; source: Input | Result["input"]; onFrameChange: (frame: number) => void;
-  home?: {label: string; example: boolean}; startAdvanced?: boolean;
+  home?: {label: string; example: boolean; upload: ReactNode}; startAdvanced?: boolean;
 }) {
   const [view, setView] = useState<'demo' | 'analysis'>(startAdvanced ? 'analysis' : 'demo');
+  const [compare, setCompare] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [cursor, setCursor] = useState(0);
   const [playing, setPlaying] = useState(false);
   const clockStart = useRef(0);
@@ -146,7 +179,6 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
   const row = rows[frame];
   const windowStart = Math.floor(frame / 8) * 8;
   const reconstruction = useMemo(() => {
-    if (isHome) return [];
     const window = rows.slice(windowStart, windowStart + 8);
     const forward = window.map(r => flattenCode(r.state));
     const refined = refineCode(forward, window.map(r => r.pixels), window.map(r => r.weights), renderer);
@@ -155,9 +187,9 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
       const decoded = affine(refined[i], renderer.weights, renderer.offset);
       return {plain, decoded, initial: imageError(r.pixels, plain), final: imageError(r.pixels, decoded)};
     });
-  }, [rows, windowStart, isHome])[frame - windowStart];
+  }, [rows, windowStart])[frame - windowStart];
   const {signal, spectrogramRows, spectrum, upperHz} = useMemo(() => {
-    const signal = isHome ? [] : internal.map(sample => sample[site]);
+    const signal = internal.map(sample => sample[site]);
     const power = spectrogram(signal, internalRate);
     const db = (value: number) => 10 * Math.log10(Math.max(1e-12, value));
     const bins = power[0]?.length ?? 0;
@@ -170,11 +202,24 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
       }));
     const upperHz = (bins - 1) * internalRate / Math.max(1, spectrumWindowLength(signal.length, internalRate));
     return {signal, spectrogramRows, spectrum, upperHz};
-  }, [internal, internalRate, site, isHome]);
+  }, [internal, internalRate, site]);
   const sliceSize = Math.min(modeTrace.length, Math.round(.6*internalRate));
   const sliceStart = Math.max(0, Math.min(modeTrace.length-sliceSize, sample-Math.floor(sliceSize/2)));
   const waveWindow = home ? modeTrace.slice(sliceStart, sliceStart+sliceSize) : modeTrace;
   const waveCursor = home ? sample-sliceStart : sample;
+  const modeSeries = useMemo(() => MODES.map((_,modeIndex) => {
+    const data = Array.from({length: internal.length}, (_, t) =>
+      field![(t*sites.length*MODES.length + site*MODES.length + modeIndex)*2]);
+    return {data, peak: Math.max(1e-8, ...data.map(Math.abs))};
+  }), [field, internal.length, site]);
+  const mapPeak = useMemo(() => {
+    let peak = 1e-8;
+    for (let t = 0; isHome && t < internal.length; t++) for (let i = 0; i < sites.length; i++) {
+      const offset = (t*sites.length*MODES.length + i*MODES.length + mode)*2;
+      peak = Math.max(peak, Math.hypot(field![offset], field![offset+1]));
+    }
+    return peak;
+  }, [field, internal.length, isHome, mode]);
   const wavePeak = useMemo(() => Math.max(1e-5, ...modeTrace.map(Math.abs)), [modeTrace]);
   const spectrumPeak = Math.max(-119, ...spectrogramRows.flat());
   const magnitude = sites.map((_, i) => Math.hypot(...stateAt(i, mode)));
@@ -185,14 +230,14 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
   const {driveGain: gate, shiftHz} = crossMode(stateAt(site, 0), mode);
   const crossTrace = useMemo(() => {
     const gain: number[] = [], frequency: number[] = [];
-    for (let t = 0; !isHome && t < internal.length; t++) {
+    for (let t = 0; t < internal.length; t++) {
       const index = (t*sites.length + site) * MODES.length * 2;
       const coupling = crossMode([field![index], field![index+1]], mode);
       gain.push(coupling.driveGain);
       frequency.push(coupling.shiftHz);
     }
     return {gain, frequency};
-  }, [field, internal.length, mode, site, isHome]);
+  }, [field, internal.length, mode, site]);
   const firstTime = `${metric(1/internalRate)} s`;
   const lastTime = `${metric(internal.length/internalRate)} s`;
   const prediction = useMemo(() => {
@@ -234,7 +279,27 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
     </>}
     {home && <div className="cove-hero-grid">
       <InputPreview rgb={frames[frame]} fallback={home.example} label={home.label}/>
-      <div className="cove-hero-output">{waveform}{activity}</div>
+      <div className="cove-hero-output">
+        <div className="wave-heading"><h2>Computed oscillatory encoding</h2>
+          <button aria-pressed={compare} onClick={() => setCompare(value => !value)}>{compare ? 'Show selected mode' : 'Compare four modes'}</button>
+          <button aria-pressed={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Compact waveforms' : 'Expand waveforms'}</button>
+        </div>
+        <div className={expanded ? "mode-traces expanded" : "mode-traces"}>
+          {(compare ? MODES.map((_,i) => i) : [mode]).map(i => {
+            const {data, peak} = modeSeries[i];
+            const [real, imaginary] = stateAt(site, i);
+            const amplitude = Math.hypot(real, imaginary);
+            const angle = amplitude > 1e-9 ? `${metric(Math.atan2(imaginary, real))} rad` : 'undefined';
+            const digits = `A ${metric(amplitude)} · phase ${angle}`;
+            const values = expanded ? data : data.slice(sliceStart, sliceStart+sliceSize);
+            return <Trace key={i} title={`${MODES[i]} Hz`} values={values} unit={digits} color={modeColors[i]}
+              extent={[-peak, peak]} cursor={expanded ? sample : sample-sliceStart}
+              start={expanded ? firstTime : `${metric((sliceStart+1)/internalRate)} s`}
+              end={expanded ? lastTime : `${metric((sliceStart+sliceSize)/internalRate)} s`}/>;
+          })}
+        </div>
+        <p className="demo-caption">Real component in arbitrary units. Each mode has its own vertical scale.</p>
+      </div>
     </div>}
     <div className="cove-transport" aria-label="COVE playback controls">
       <button onClick={() => {
@@ -266,7 +331,7 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
       <label>Mode <select value={mode} onChange={event => setMode(Number(event.target.value))}>
         {MODES.map((hz, index) => <option key={hz} value={index}>{hz} Hz</option>)}
       </select></label>
-      {view === 'analysis' && <label>Haar scale <select value={scale} onChange={event => setScale(Number(event.target.value))}>
+      {(home || view === 'analysis') && <label>Haar scale <select value={scale} onChange={event => setScale(Number(event.target.value))}>
         {HAAR_SCALES.map((size, index) => <option key={size} value={index}>{size}+{size} frames</option>)}
       </select></label>}
       {!home && stillImage && <label>ERP calibration JSON <input type="file" accept=".json,application/json" onChange={async event => {
@@ -291,8 +356,17 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
       </select></label>}
     </div>
     {error && <p className="error" role="alert">{error}</p>}
-    {home ? <p className="demo-caption">Computed COVE states · simulated population activity</p> : <>
-    <p className="hint">Site {site+1} · eccentricity {metric(sites[site].eccentricity)} · cross-mode drive gain {metric(gate)} · instantaneous frequency shift {metric(shiftHz)} Hz</p>
+    {home && <>
+      <div className="landing-spatial">
+        <Activity amplitudes={magnitude} peak={mapPeak} site={site}/>
+        <div><h2>Spatial distribution</h2><p>The map follows the selected mode on the same clock as the waveforms. Choose a site to inspect its four complex responses.</p>
+          <p>For a still image, the model evolves under a held visual input. The photograph stays fixed as the state responds.</p></div>
+      </div>
+      {home.upload}
+      <h2 className="public-science-title">Scientific visualizations</h2>
+    </>}
+    <>
+    <p className="hint">Site {site+1} · eccentricity {metric(sites[site].eccentricity)} · cross mode drive gain {metric(gate)} · instantaneous frequency shift {metric(shiftHz)} Hz</p>
     <div className="plot-grid">
       <InputPreview rgb={frames[frame]}/>
       <Heatmap title="Forward code reconstruction" rows={grid(reconstruction.plain, 12)} min={0} max={1}
@@ -300,7 +374,7 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
       {waveform}{activity}
       <Heatmap title="Population amplitude" rows={grid(magnitude)} min={0} max={.25} unit="0–0.25 a.u. display scale"/>
       <Heatmap title="Population phase" rows={grid(phase)} min={-Math.PI} max={Math.PI} unit="−π to π rad · gray if undefined"/>
-      {view === 'analysis' && <>
+      {(home || view === 'analysis') && <>
       <figure className="cove-figure"><figcaption>Retinotopic luminance<span>Central and peripheral sampling</span></figcaption>
         <svg viewBox="0 0 64 64" role="img" aria-label="Retinotopic sites positioned in image coordinates">
           {sites.map((point, i) => <circle key={i} cx={point.x+.5} cy={point.y+.5}
@@ -319,9 +393,9 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
         min={-.25} max={.25} unit={frames.length === 1 ? 'Still input · zero detail' : 'Signed luminance change'}/>
       <Heatmap title="Incoming site weights" rows={grid(sites.map((_, i) =>
         row.weights[site].find(edge => edge.j === i)?.weight ?? 0))} min={0} max={1} unit="0–1"/>
-      <Trace title="Cross-mode frequency shift" values={crossTrace.frequency} unit="Relative to nominal mode · Hz"
+      <Trace title="Cross mode frequency shift" values={crossTrace.frequency} unit="Relative to nominal mode · Hz"
         start={firstTime} end={lastTime} cursor={sample}/>
-      <Trace title="Phase–amplitude drive gain" values={crossTrace.gain} unit="Forcing multiplier"
+      <Trace title="Phase and amplitude drive gain" values={crossTrace.gain} unit="Forcing multiplier"
         start={firstTime} end={lastTime} extent={[.82, 1]} cursor={sample}/>
       <Trace title="Modeled site waveform" values={signal} unit="Summed real state · a.u."
         start={`${metric(1/internalRate)} s`} end={`${metric(signal.length/internalRate)} s`}/>
@@ -329,7 +403,7 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
         start="0 Hz" end={`${metric(upperHz)} Hz`}/>}
       <Heatmap title="Modeled site spectrogram" rows={spectrogramRows} min={spectrumPeak-50} max={spectrumPeak}
         unit={`0–${metric(Math.max(0, upperHz))} Hz · time → · dB`}/>
-      <Heatmap title="Inverse-refined reconstruction" rows={grid(reconstruction.decoded, 12)} min={0} max={1}
+      <Heatmap title="Input guided reconstruction" rows={grid(reconstruction.decoded, 12)} min={0} max={1}
         unit={`RMSE ${metric(reconstruction.final.rmse)} · ${metric(reconstruction.final.psnr)} dB PSNR`} grayscale/>
       </>}
       {prediction.legacy.length > 0 && <Heatmap title="Legacy calibrated reconstruction" rows={grid(prediction.legacy, 12)}
@@ -338,13 +412,13 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
         values={erp} unit="Scaled CSD" start="10 ms" end="590 ms" extent={[-peak, peak]}/>}
     </div>
     <p className="hint">The waveform cursor and activity maps show computed subsamples. Reconstruction updates per input frame.
-      {view === 'analysis' && ' Inverse refinement uses the input pixels and spans up to eight frames.'}</p>
+      {(home || view === 'analysis') && ' Inverse refinement uses the input pixels and spans up to eight frames.'}</p>
     {activeModel?.schema === 'cove-erp-v2' && <p className="hint">
       Held-out calibration ({activeModel.test_conditions} images) · RMSE {metric(activeModel.held_out.rmse)} scaled CSD ·
       {' '}{metric(100*activeModel.held_out.skill)}% MSE skill vs training mean · {activeModel.mode.replaceAll('_', ' ')}
     </p>}
     {activeModel && <p className="hint">ERP predictions are relative to still-image onset. Held-out metrics describe the calibration dataset.</p>}
-    {stillImage && !model && <p className="hint">Load an exported calibration to display the participant-specific ERP prediction.</p>}
-    </>}
+    {!home && stillImage && !model && <p className="hint">Load an exported calibration to display the participant-specific ERP prediction.</p>}
+    </>
   </section>;
 }

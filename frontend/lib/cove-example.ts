@@ -20,3 +20,7 @@ export function coveExample() {
     return rgb;
   });
 }
+
+export const neighborhoodInput: Input = {
+  kind: 'images', width: 1280, height: 853, fps: 24, sampling: 'bundled-photograph-area-resize',
+};
