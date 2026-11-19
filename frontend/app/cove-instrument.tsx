@@ -3,97 +3,104 @@
 import { memo, useMemo, useState } from 'react';
 import { MODES, FOURIER_EDGES, gray, type Site } from '../lib/cove';
 import { SIZE, spatialBand } from '../lib/features';
-import { fieldIndex, MODE_COLORS } from '../lib/cove-visualization';
+import { rackSites, rackState } from '../lib/cove-visualization';
 import { SiteOverlay } from './cove-science';
 
 const fmt=(n:number)=>Number(n.toPrecision(4)).toString();
 
-export const SignalRack = memo(function SignalRack({field,sites,site,mode,cursor,rate,seek,select,count}:{
+const rackColors = ['#67ddff','#a9eb72','#ffc170','#fb90d6','#9eaaff','#55efbd','#ff947e','#f7df72',
+  '#7dbfff','#d5a5ff','#76ebdd','#ffa799','#b4df8a','#f7a7ea','#82c9ff','#ffe591'];
+
+export const SignalRack = memo(function SignalRack({field,sites,site,mode,cursor,rate,seek,select,setMode,count,expanded=false,onExpand}:{
   field:Float64Array;sites:Site[];site:number;mode:number;cursor:number;rate:number;count:number;
-  seek:(sample:number)=>void;select:(site:number)=>void;
+  seek:(sample:number)=>void;select:(site:number)=>void;setMode:(mode:number)=>void;
+  expanded?:boolean;onExpand?:()=>void;
 }) {
   const [zoom,setZoom]=useState(1);
   const [quantity,setQuantity]=useState<'real'|'imaginary'|'amplitude'|'phase'>('real');
   const [hover,setHover]=useState<{row:number;sample:number}>();
-  const [arrangement,setArrangement]=useState<'montage'|'field'|'modes'>('montage');
-  const channels=useMemo(()=>{
-    const side=Math.sqrt(sites.length);
-    const across=[0,.5,1].map(p=>Math.round(p*(side-1)));
-    const anchors=across.flatMap(y=>across.map(x=>y*side+x));
-    const montageSites=[...new Set([site,anchors[0],anchors[2],anchors[6],anchors[8]])].slice(0,4);
-    const pairs=arrangement==='montage' ? montageSites.flatMap(i=>MODES.map((_,m)=>({site:i,mode:m}))) :
-      arrangement==='field' ? [...new Set([site,...anchors])].map(i=>({site:i,mode})) :
-      MODES.map((_,i)=>({site,mode:i}));
-    return pairs.map(pair=>({...pair,data:Array.from({length:count},(_,t)=>{
-      const at=fieldIndex(t,pair.site,pair.mode,sites.length), re=field[at], im=field[at+1], a=Math.hypot(re,im);
-      return quantity==='real'?re:quantity==='imaginary'?im:quantity==='amplitude'?a:a>1e-9?Math.atan2(im,re):null;
-    })}));
-  },[field,sites.length,site,mode,quantity,count,arrangement]);
-  const shown=Math.min(count,Math.max(3,Math.ceil(count/zoom)));
-  const from=Math.max(0,Math.min(count-shown,cursor-Math.floor(shown/2)));
-  const end=from+shown-1;
-  const dy=arrangement==='montage'?38:46, top=27, height=top+channels.length*dy+34, left=120, right=1180;
-  const x=(i:number)=>left+(i-from)/Math.max(1,end-from)*(right-left);
+  const channels=useMemo(()=>rackSites(Math.sqrt(sites.length),site,expanded)
+    .flatMap((i, group)=>MODES.map((_,m)=>({site:i,mode:m,color:rackColors[(group*5+m)%rackColors.length]}))),
+    [sites.length,site,expanded]);
+  const span=Math.min(count,Math.max(3,Math.ceil(Math.min(count,Math.ceil(rate*.5))/zoom)));
+  const from=Math.max(-1,Math.min(count-span-1,cursor-Math.floor(span/2)));
+  const end=from+span;
+  const dy=expanded?24:13.2, top=5, height=top+channels.length*dy+28, left=expanded?206:70, width=expanded?1120:680;
+  const right=width-22;
+  const x=(i:number)=>left+(i-from)/span*(right-left);
+  const read=(r:{site:number;mode:number}, time:number)=>{
+    const {re,im}=rackState(field,sites.length,r.site,r.mode,rate,time);
+    const amplitude=Math.hypot(re,im);
+    return quantity==='real'?re:quantity==='imaginary'?im:quantity==='amplitude'?amplitude:
+      amplitude>1e-9?Math.atan2(im,re):null;
+  };
   const paths=useMemo(()=>channels.map((r,i)=>{
-    const peak=quantity==='phase'?Math.PI:Math.max(1e-9,...r.data.slice(from,end+1).map(v=>Math.abs(v??0)));
-    const mid=top+(i+.5)*dy;
+    const subdivisions=8;
+    const values=Array.from({length:span*subdivisions+1},(_,k)=>read(r,from+k/subdivisions));
+    let min=Infinity,max=-Infinity;
+    for(const v of values) if(v!==null){min=Math.min(min,v);max=Math.max(max,v);}
+    if(min===Infinity){min=0;max=0;}
+    if(quantity==='phase'){min=-Math.PI;max=Math.PI;}
+    const center=(max+min)/2, half=Math.max(1e-9,(max-min)/2), baseline=top+(i+.5)*dy;
     let last:number|null=null;
-    let d='';
-    for(let t=from;t<=end;t++){
-      const v=r.data[t];
-      if(v===null){last=null;continue;}
+    const d=values.map((v,k)=>{
+      if(v===null){last=null;return '';}
       const move=last===null||(quantity==='phase'&&Math.abs(v-last)>Math.PI);
-      d+=`${move?'M':'L'}${(left+(t-from)/Math.max(1,end-from)*(right-left)).toFixed(2)} ${(mid-(dy/2-4)*v/peak).toFixed(2)}`;
       last=v;
-    }
-    return {d,peak};
-  }),[channels,quantity,from,end,dy]);
+      return `${move?'M':'L'}${x(from+k/subdivisions).toFixed(2)} ${(baseline-(dy/2-1.25)*(v-center)/half).toFixed(2)}`;
+    }).join('');
+    return {d,min,max};
+  // The horizontal transform and state accessor depend on these inputs.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }),[channels,field,sites.length,rate,quantity,from,span,dy,left,right]);
   const point=(event:React.PointerEvent<SVGSVGElement>|React.MouseEvent<SVGSVGElement>)=>{
     const rect=event.currentTarget.getBoundingClientRect();
-    const col=Math.round(from+((event.clientX-rect.left)/rect.width*1200-left)/(right-left)*(end-from));
+    const col=Math.round(from+((event.clientX-rect.left)/rect.width*width-left)/(right-left)*span);
     const row=Math.floor(((event.clientY-rect.top)/rect.height*height-top)/dy);
-    return {row:Math.max(0,Math.min(channels.length-1,row)),sample:Math.max(from,Math.min(end,col))};
+    return {row:Math.max(0,Math.min(channels.length-1,row)),sample:Math.max(-1,Math.min(end,col))};
   };
   const active=hover?channels[hover.row]:undefined;
-  return <section className="signal-instrument" aria-labelledby="signal-instrument-title">
-    <div className="instrument-heading"><div><h2 id="signal-instrument-title">Distributed oscillatory signal rack</h2>
-      <p>{sites.length} computed sites · {fmt(rate)} integration samples/s · {fmt(count/rate)} s modeled response</p></div>
-      <div className="science-controls">
-        <label>Channels<select value={arrangement} onChange={e=>setArrangement(e.target.value as typeof arrangement)}>
-          <option value="montage">Four modes across four sites</option><option value="field">Compare scene sites</option><option value="modes">Compare modes at selected site</option>
-        </select></label>
+  const v=active&&hover?read(active,hover.sample):null;
+  const unit=quantity==='phase'?'rad':'a.u.';
+  return <section className={`signal-instrument ${expanded?'rack-expanded':'rack-primary'}`} aria-label={expanded?'Expanded COVE waveform rack':'COVE waveform rack'}>
+    <div className="instrument-heading"><div><h2>{expanded?'Expanded waveform rack':'COVE waveform rack'}</h2>
+      <p>{channels.length} traces · {channels.length/MODES.length} sites · {fmt(rate)} integrated samples/s</p></div>
+      {onExpand&&<button type="button" aria-expanded={expanded} onClick={onExpand}>{expanded?'Close expanded view':'Expand to 64 traces'}</button>}
+      {expanded&&<div className="science-controls">
         <label>Signal quantity<select value={quantity} onChange={e=>setQuantity(e.target.value as typeof quantity)}>
           <option value="real">Real component</option><option value="imaginary">Imaginary component</option>
           <option value="amplitude">Magnitude envelope</option><option value="phase">Wrapped phase</option>
         </select></label>
-        <label>Signal zoom · {zoom}×<input type="range" min="1" max="16" value={zoom} onChange={e=>setZoom(e.target.valueAsNumber)}/></label>
-      </div></div>
-    <figure className="cove-figure rack-figure"><figcaption>{arrangement==='montage'?'Distributed four-mode montage':arrangement==='field'?`${MODES[mode]} Hz across the scene`:`Four modes at site ${site+1}`}
-      <span>{quantity==='phase'?'Radian scale':'Independent per channel scales · arbitrary units'}</span></figcaption>
-      <svg viewBox={`0 0 1200 ${height}`} preserveAspectRatio="none" style={{height}} role="img" aria-label="Full resolution stacked COVE signal traces"
+        <label>Time zoom · {zoom}×<input type="range" min="1" max="16" value={zoom} onChange={e=>setZoom(e.target.valueAsNumber)}/></label>
+      </div>}
+    </div>
+    <figure className="cove-figure rack-figure"><figcaption>{quantity==='real'?'Real component of rotating COVE states':quantity==='imaginary'?'Imaginary component':quantity==='amplitude'?'Magnitude envelope':'Wrapped phase'}
+      <span>Independent row scales · {unit}</span></figcaption>
+      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{height}} role="img" aria-label={`${channels.length} stacked COVE signal traces`}
         onPointerMove={e=>setHover(point(e))} onPointerLeave={()=>setHover(undefined)} onClick={e=>{
-          const p=point(e);select(channels[p.row].site);seek(p.sample);
+          const p=point(e);select(channels[p.row].site);setMode(channels[p.row].mode);seek(Math.max(0,p.sample));
         }}>
         {channels.map((r,i)=><g key={`${r.site}:${r.mode}`}>
-          <rect x="0" y={top+i*dy} width="1200" height={dy} fill={r.site===site?'#e4f2fa':i%2?'#f1f7fa':'#f9fcfe'}/>
-          <path d={`M${left} ${top+(i+.5)*dy}H${right}`} stroke="#b8ccd9" strokeDasharray="4 4"/>
-          <text x="10" y={top+i*dy+17}>Site {r.site+1} · {MODES[r.mode]} Hz</text>
-          <text x="10" y={top+i*dy+32}>±{fmt(paths[i].peak)} {quantity==='phase'?'rad':'a.u.'}</text>
+          <rect x="0" y={top+i*dy} width={width} height={dy} fill={r.site===site&&r.mode===mode?'#263f57':Math.floor(i/4)%2?'#14263b':'#102034'}/>
+          {i%4===0&&<path d={`M0 ${top+i*dy}H${right}`} stroke="#354b62"/>}
+          <path d={`M${left} ${top+(i+.5)*dy}H${right}`} stroke="#2b4058" strokeDasharray="2 4"/>
+          <text x="8" y={top+i*dy+dy/2+3} style={{fill:r.color}}>S{r.site+1} · {MODES[r.mode]} Hz</text>
+          {expanded&&<text x="78" y={top+i*dy+dy/2+3} className="rack-scale-text">{fmt(paths[i].min)}…{fmt(paths[i].max)}</text>}
         </g>)}
-        {[0,1,2,3,4,5].map(j=>{
-          const t=from+(end-from)*j/5;
-          return <g key={j}><path d={`M${x(t)} ${top}V${height-32}`} stroke="#bcd1df" opacity=".55"/>
-            <text x={x(t)} y={height-12} textAnchor="middle">{fmt((t+1)/rate)} s</text></g>;
+        {[0,1,2,3,4].map(j=>{
+          const t=from+(end-from)*j/4;
+          return <g key={j}><path d={`M${x(t)} ${top}V${height-25}`} stroke="#3b5169" opacity=".65"/>
+            <text x={x(t)} y={height-9} className="rack-scale-text" textAnchor={j===4?'end':'middle'}>{fmt((t+1)/rate*1000)} ms</text></g>;
         })}
-        {channels.map((r,i)=><path key={`${r.site}:${r.mode}`} d={paths[i].d} className="trace" style={{color:MODE_COLORS[r.mode]}}/>)}
-        <line x1={x(cursor)} x2={x(cursor)} y1={top} y2={height-34} stroke="#a65d21" strokeWidth="1.5"/>
-        {hover&&<line x1={x(hover.sample)} x2={x(hover.sample)} y1={top} y2={height-34} stroke="#143c60" strokeDasharray="3 3"/>}
+        {channels.map((r,i)=><path key={`${r.site}:${r.mode}`} d={paths[i].d} className="trace" style={{color:r.color}}/>)}
+        <line x1={x(cursor)} x2={x(cursor)} y1={top} y2={height-27} stroke="#fff0aa" opacity=".85"/>
+        {hover&&<line x1={x(hover.sample)} x2={x(hover.sample)} y1={top} y2={height-27} stroke="#e4f4ff" strokeDasharray="3 3"/>}
       </svg>
       <p className="rack-readout">{active&&hover ?
-        `Site ${active.site+1} · ${MODES[active.mode]} Hz · ${fmt((hover.sample+1)/rate)} s · ${active.data[hover.sample]===null?'undefined':fmt(active.data[hover.sample]!)}` :
-        'Hover to inspect a sample. Select a trace to set the site and playback time.'}</p>
+        `Site ${active.site+1} · ${MODES[active.mode]} Hz · ${fmt((hover.sample+1)/rate*1000)} ms · ${v===null?'undefined':fmt(v)} ${unit}` :
+        'Hover for exact samples. Click any row to select its site, mode and time.'}</p>
     </figure>
-    <p>These traces are the integrated complex state in a model that already includes mode rotation. The real component is displayed directly. Magnitude and wrapped phase describe the same state in polar coordinates.</p>
+    {expanded&&<p>Substep curves interpolate the rotating complex state between integrated samples. Each row is centered and scaled to its displayed range. Hover values retain the original units.</p>}
   </section>;
 });
 

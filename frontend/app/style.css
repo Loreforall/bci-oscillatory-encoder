@@ -230,3 +230,23 @@ dialog h2 { position: sticky; top: 0; }
 @media(max-width:640px) { .rack-figure { overflow-x:auto; } .rack-figure svg { min-width:620px; } }
 .cove-hero-output .hero-science-wave:not(.expanded) .scientific-trace svg { height:168px; }
 .cove-hero-output .aligned-field .spatial-square { max-width:210px; }
+
+.cove-hero-grid { grid-template-columns:minmax(0,.77fr) minmax(0,1.23fr); }
+.cove-hero-grid .aligned-field .spatial-square { max-width:210px; }
+.signal-instrument.rack-primary,.signal-instrument.rack-expanded { background:#162a41; color:#e4f2fc; border-color:#3b5771; }
+.signal-instrument.rack-primary { margin:0; padding:9px; min-width:0; }
+.signal-instrument .instrument-heading h2,.signal-instrument .instrument-heading p,.signal-instrument > p { color:#e4f2fc; }
+.signal-instrument .instrument-heading p { font:11px var(--mono); margin:4px 0 7px; }
+.signal-instrument .instrument-heading button { align-self:center; }
+.signal-instrument .rack-figure { background:#102034; border-color:#466179; }
+.signal-instrument .rack-figure figcaption,.signal-instrument .rack-readout { background:#213951; color:#d8eafb; }
+.signal-instrument .rack-figure svg { fill:#c8dced; display:block; min-width:0; }
+.signal-instrument .rack-figure svg text { font:10px var(--mono); }
+.signal-instrument .rack-figure .trace { stroke-width:1.35px; }
+.rack-expanded .rack-figure .trace { stroke-width:1.55px; }
+@media(max-width:740px) { .cove-hero-grid { grid-template-columns:minmax(0,1fr); } }
+.signal-instrument .instrument-heading button { background:#294963; border-color:#759bb8; color:#f1f8ff; }
+.signal-instrument .instrument-heading button:hover { background:#365a77; }
+.signal-instrument .rack-figure figcaption span { color:#b9d0e3; }
+.signal-instrument .science-controls select { background:#f3f8fc; color:#173047; }
+.signal-instrument .rack-figure svg .rack-scale-text { fill:#c5dbef; }

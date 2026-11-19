@@ -175,3 +175,36 @@ test('inverse Fourier display bands reconstruct the non DC image', async () => {
   const mean=input.reduce((a,b)=>a+b,0)/input.length;
   assert.ok(input.every((value,i)=>Math.abs(value-mean-bands.reduce((sum,band)=>sum+band[i],0))<1e-12));
 });
+
+test('overview and expanded racks use distinct computed channels and retain every integration sample', async () => {
+  const {rackSites, rackState, fieldIndex} = await import('../lib/cove-visualization.ts');
+  const {field, internalRate, internal, sites} = analyzeCove(frames, 24, [2, 0], true, 16);
+  for (const expanded of [false, true]) {
+    const selected = 119;
+    const channels = rackSites(16, selected, expanded);
+    assert.equal(new Set(channels).size, expanded ? 16 : 8);
+    assert.ok(channels.includes(selected));
+    for (const site of channels) for (let mode=0; mode<4; mode++) {
+      const trajectory = [];
+      for (let t=0; t<internal.length; t++) {
+        const i = fieldIndex(t, site, mode, sites.length);
+        assert.deepEqual(rackState(field, sites.length, site, mode, internalRate, t), {re:field[i], im:field[i+1]});
+        const midpoint = rackState(field, sites.length, site, mode, internalRate, t-.5);
+        assert.ok(Number.isFinite(midpoint.re) && Number.isFinite(midpoint.im));
+        trajectory.push(field[i], field[i+1]);
+      }
+      assert.ok(trajectory.some(value => Math.abs(value) > 1e-9));
+    }
+  }
+});
+
+test('substep display follows damped rotation and preserves a zero input', async () => {
+  const {rackState} = await import('../lib/cove-visualization.ts');
+  const rate = 120, field = new Float64Array(16), theta = 2*Math.PI*40/rate;
+  field[6] = 1;
+  field[14] = Math.exp(-1/(.09*rate))*Math.cos(theta);
+  field[15] = Math.exp(-1/(.09*rate))*Math.sin(theta);
+  const midpoint = rackState(field, 1, 0, 3, rate, .5);
+  close([midpoint.re,midpoint.im], [Math.cos(theta/2),Math.sin(theta/2)].map(v=>v*Math.exp(-.5/(.09*rate))), 1e-12);
+  assert.deepEqual(rackState(new Float64Array(16),1,0,3,rate,.5), {re:0,im:0});
+});

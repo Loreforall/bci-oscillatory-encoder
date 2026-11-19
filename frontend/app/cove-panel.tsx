@@ -8,7 +8,7 @@ import { fieldCsv, fieldJson } from '../lib/cove-export';
 import type { Input, Result } from '../lib/encoder';
 import { playbackFrame, playbackSample } from '../lib/cove-playback';
 import { AlignedMap, FeatureAtlas, SignalRack } from './cove-instrument';
-import CoveScience, { ScientificPlot, SiteOverlay } from './cove-science';
+import CoveScience, { SiteOverlay } from './cove-science';
 import FramePreview from './frame-preview';
 import renderer from '../lib/cove-decoder.json';
 
@@ -25,7 +25,6 @@ function InputPreview({rgb, fallback, label, overlay}: {rgb: Uint8Array; fallbac
   </figure>;
 }
 
-const modeColors = ['#176890', '#6150a0', '#087f79', '#9a4d1f'];
 const DEFAULT_SLOPES = [2, 2];
 function download(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
@@ -92,7 +91,6 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
   home?: {label: string; example: boolean; upload: ReactNode}; startAdvanced?: boolean;
 }) {
   const [view, setView] = useState<'demo' | 'analysis'>(startAdvanced ? 'analysis' : 'demo');
-  const [compare, setCompare] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [overlay, setOverlay] = useState(true);
   const [resetVersion, setResetVersion] = useState(0);
@@ -192,14 +190,6 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
   const sliceStart = Math.max(0, Math.min(modeTrace.length-sliceSize, sample-Math.floor(sliceSize/2)));
   const waveWindow = modeTrace;
   const waveCursor = sample;
-  const modeSeries = useMemo(() => MODES.map((_,modeIndex) => {
-    const data = Array.from({length: internal.length}, (_, t) =>
-      field![(t*sites.length*MODES.length + site*MODES.length + modeIndex)*2]);
-    return {data, peak: Math.max(1e-8, ...data.map(Math.abs))};
-  }), [field, internal.length, site, sites.length]);
-  const heroSeries = useMemo(() => (compare ? MODES.map((_,i)=>i) : [mode]).map(i=>({
-    name: `${MODES[i]} Hz`, color: modeColors[i], data: modeSeries[i].data,
-  })), [compare,mode,modeSeries]);
   const wavePeak = useMemo(() => Math.max(1e-5, ...modeTrace.map(Math.abs)), [modeTrace]);
   const spectrumPeak = Math.max(-119, ...spectrogramRows.flat());
   const magnitude = sites.map((_, i) => Math.hypot(...stateAt(i, mode)));
@@ -266,17 +256,6 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
           <span>Site {site+1} · x {metric(sites[site].x)}, y {metric(sites[site].y)} px on the 64 × 64 input</span>
         </div>
         <p className="hint">Highlighted pixels are the bilinear sampling taps for the selected location. Local image filters also use surrounding pixels. The markers indicate sampling locations.</p>
-      </div>
-      <div className="cove-hero-output">
-        <div className="wave-heading"><h2>Computed oscillatory encoding</h2>
-          {expanded && <button aria-pressed={compare} onClick={() => setCompare(value => !value)}>{compare ? 'Show selected mode' : 'Compare four modes'}</button>}
-          <button aria-pressed={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Compact waveform' : 'Expand waveform'}</button>
-        </div>
-        <div className={`hero-science-wave${expanded ? " expanded" : ""}`}>
-          <ScientificPlot title="Modeled waveforms at selected site" unit="Real component · a.u."
-            series={heroSeries} rate={internalRate} domain={expanded ? [0,internal.length-1] : [sliceStart,sliceStart+sliceSize-1]}
-            cursor={sample} onSeek={seek} scaling="independent"/>
-        </div>
         <AlignedMap title={`${MODES[mode]} Hz whole scene amplitude`} unit="a.u." sites={sites} values={magnitude} site={site} select={setSite}/>
         <dl className="hero-site-readout">
           <dt>Local luminance</dt><dd>{metric(row.brightness[site])}</dd>
@@ -288,6 +267,11 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
         </dl>
         <p className="demo-caption">{sites.length} independently computed sites. The higher resolution fields are computational extensions. Reported EEG results use the verified reference field.</p>
       </div>
+      <SignalRack key={`primary-${resetVersion}`} field={field!} sites={sites} site={site} mode={mode} cursor={sample}
+        rate={internalRate} count={internal.length} seek={seek} select={setSite} setMode={setMode} onExpand={()=>{
+          setExpanded(true);
+          requestAnimationFrame(()=>document.getElementById('expanded-waveforms')?.scrollIntoView({block:'start'}));
+        }}/>
     </div>}
     <div className="cove-transport" aria-label="COVE playback controls">
       <button onClick={() => {
@@ -301,7 +285,7 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
       }}>{playing ? 'Pause' : 'Play'}</button>
       <button onClick={() => seek(0)}>Reset playback</button>
       {home && <button onClick={() => {
-        seek(0); setSite(Math.floor((side-1)/2)*(side+1)); setMode(0); setScale(0); setCompare(true); setExpanded(false); setOverlay(true);
+        seek(0); setSite(Math.floor((side-1)/2)*(side+1)); setMode(0); setScale(0); setExpanded(false); setOverlay(true);
         setResetVersion(value=>value+1);
       }}>Reset View</button>}
       <label>Playback timeline <input type="range" min="0" max={internal.length-1} value={sample}
@@ -359,8 +343,13 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
     </div>
     {error && <p className="error" role="alert">{error}</p>}
     {home && <>
-      <SignalRack key={`rack-${resetVersion}`} field={field!} sites={sites} site={site} mode={mode} cursor={sample}
-        rate={internalRate} count={internal.length} seek={seek} select={setSite}/>
+      {expanded && <div id="expanded-waveforms">
+        <SignalRack key={`rack-${resetVersion}`} field={field!} sites={sites} site={site} mode={mode} cursor={sample}
+          rate={internalRate} count={internal.length} seek={seek} select={setSite} setMode={setMode} expanded onExpand={()=>{
+            setExpanded(false);
+            document.querySelector<HTMLButtonElement>('.rack-primary button')?.focus();
+          }}/>
+      </div>}
       {home.upload}
       <FeatureAtlas key={`atlas-${resetVersion}`} rgb={frames[frame]} sites={sites} site={site} select={setSite}
         brightness={row.brightness} contrast={row.contrast} detail={row.detail}/>

@@ -18,3 +18,9 @@ Median of three warm TypeScript runs in Node 24.19.0 on macOS arm64. Input was 1
 | 32 × 32 | 1024 | 246 | 10.13 |
 
 The 16 × 16 grid was selected as the default compromise for this workbench. The 32 × 32 grid was measured but is not a public selector option. Automated checks cover 10 × 10 and 16 × 16 local graph normalization and bounds, complex state dimensions, Python and TypeScript agreement at selected sites on every integration step, and Fourier projection consistency. The original THINGS EEG2 advanced report reproduced byte for byte.
+
+## Waveform display
+
+The home rack displays four modes at eight representative sites, including the selected site. The expanded view displays four modes at sixteen sites. Both read from the full integration-rate complex field. The real component already rotates because the state update includes the mode frequency and adaptive shift.
+
+For display between stored samples, let `a = −1/(0.09 f_s) + i2π(f_m + Δf)/f_s` be the model's dimensionless complex rotation and decay over one integration interval. For fractional time `u ∈ [0,1]`, the display uses `z(u) = z₀ + (z₁ − z₀) (exp(ua) − 1)/(exp(a) − 1)`. This is the solution of a scalar rotating and damped equation with constant effective forcing chosen to reach the next computed endpoint. It preserves both endpoints and the homogeneous rotation. The forcing absorbs net spatial mixing and drive for that interval. The eight display subdivisions per interval are interpolated, while hover reports stored samples. Row centering and scaling affect only display coordinates.
