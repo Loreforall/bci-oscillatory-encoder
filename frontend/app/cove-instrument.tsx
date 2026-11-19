@@ -4,36 +4,39 @@ import { memo, useMemo, useState } from 'react';
 import { MODES, FOURIER_EDGES, gray, type Site } from '../lib/cove';
 import { SIZE, spatialBand } from '../lib/features';
 import { fieldIndex, rackSites } from '../lib/cove-visualization';
-import { CORTICAL_BANDS } from '../lib/cortical';
+import { recordingSites } from '../lib/cortical-recording';
 import { SiteOverlay } from './cove-science';
 
 const fmt=(n:number)=>Number(n.toPrecision(4)).toString();
 
-export const SignalRack = memo(function SignalRack({field,sites,site,mode,cursor,rate,seek,select,setMode,count,expanded=false,onExpand,cortical=false,children}:{
+export const SignalRack = memo(function SignalRack({field,sites,site,mode,cursor,rate,seek,select,setMode,count,expanded=false,onExpand,cortical=false,onset=0,children}:{
   field:Float64Array;sites:Site[];site:number;mode:number;cursor:number;rate:number;count:number;
   seek:(sample:number)=>void;select:(site:number)=>void;setMode:(mode:number)=>void;
-  expanded?:boolean;onExpand?:()=>void;cortical?:boolean;children?:React.ReactNode;
+  expanded?:boolean;onExpand?:()=>void;cortical?:boolean;onset?:number;children?:React.ReactNode;
 }) {
-  const bands=cortical?CORTICAL_BANDS:MODES;
+  const bands=MODES;
   const [zoom,setZoom]=useState(1);
   const [quantity,setQuantity]=useState<'real'|'imaginary'|'amplitude'|'phase'>('real');
   const [hover,setHover]=useState<{row:number;sample:number}>();
-  const channels=useMemo(()=>rackSites(Math.sqrt(sites.length),site,expanded)
+  const channels=useMemo(()=>cortical?recordingSites(sites.length,site,expanded).map(i=>({site:i,mode:0})):rackSites(Math.sqrt(sites.length),site,expanded)
     .flatMap(i=>MODES.map((_,m)=>({site:i,mode:m}))),
-    [sites.length,site,expanded]);
-  const span=Math.min(count,Math.max(3,Math.ceil(Math.min(count,Math.ceil(rate*2))/zoom)));
-  const windowStart=zoom===1 ? Math.floor((cursor+1)/span)*span-1 : cursor-Math.floor(span/2);
-  const from=Math.max(-1,Math.min(count-span-1,windowStart));
+    [sites.length,site,expanded,cortical]);
+  const span=Math.min(count-(cortical?1:0),Math.max(3,Math.ceil(Math.min(count,Math.ceil(rate*3))/zoom)));
+  const first=cortical?0:-1;
+  const windowStart=zoom>1&&cortical&&cursor<=onset ? onset-Math.floor(span/4) : zoom===1 ? Math.floor((cursor+1)/span)*span-1 : cursor-Math.floor(span/2);
+  const from=Math.max(first,Math.min(count-span-1,windowStart));
   const end=from+span;
   const dy=expanded?16:12.5, top=5, height=top+channels.length*dy+26, left=expanded?206:82, width=expanded?1120:680;
   const right=width-38, bottom=top+channels.length*dy;
-  const startMs=(from+1)/rate*1000, endMs=(end+1)/rate*1000;
-  const rawTick=(endMs-startMs)/5, order=10**Math.floor(Math.log10(rawTick));
+  const timeOffset=cortical?-onset:1;
+  const startMs=(from+timeOffset)/rate*1000, endMs=(end+timeOffset)/rate*1000;
+  const rawTick=(endMs-startMs)/6, order=10**Math.floor(Math.log10(rawTick));
   const interval=([1,2,5,10].find(v=>v*order>=rawTick)??10)*order;
   const firstTick=Math.ceil(startMs/interval)*interval;
   const ticks=Array.from({length:Math.max(0,Math.floor((endMs-firstTick)/interval+1e-9)+1)},(_,j)=>firstTick+j*interval);
   const x=(i:number)=>left+(i-from)/span*(right-left);
   const read=(r:{site:number;mode:number}, time:number)=>{
+    if(cortical)return field[time*sites.length+r.site];
     const index=fieldIndex(time,r.site,r.mode,sites.length);
     const re=time<0?0:field[index], im=time<0?0:field[index+1];
     const amplitude=Math.hypot(re,im);
@@ -45,19 +48,19 @@ export const SignalRack = memo(function SignalRack({field,sites,site,mode,cursor
     let min=Infinity,max=-Infinity;
     for(const v of values) if(v!==null){min=Math.min(min,v);max=Math.max(max,v);}
     if(min===Infinity){min=0;max=0;}
-    if(quantity==='phase'){min=-Math.PI;max=Math.PI;}
+    if(!cortical&&quantity==='phase'){min=-Math.PI;max=Math.PI;}
     const center=(max+min)/2, half=Math.max(1e-9,(max-min)/2), baseline=top+(i+.5)*dy;
     let last:number|null=null;
     const d=values.map((v,k)=>{
       if(v===null){last=null;return '';}
-      const move=last===null||(quantity==='phase'&&Math.abs(v-last)>Math.PI);
+      const move=last===null||(!cortical&&quantity==='phase'&&Math.abs(v-last)>Math.PI);
       last=v;
       return `${move?'M':'L'}${x(from+k).toFixed(2)} ${(baseline-(dy/2-1.1)*(v-center)/half).toFixed(2)}`;
     }).join('');
     return {d,min,max};
   // The horizontal transform and state accessor depend on these inputs.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }),[channels,field,sites.length,quantity,from,span,dy,left,right]);
+  }),[channels,field,sites.length,quantity,from,span,dy,left,right,cortical]);
   const point=(event:React.PointerEvent<SVGSVGElement>|React.MouseEvent<SVGSVGElement>)=>{
     const rect=event.currentTarget.getBoundingClientRect();
     const col=Math.round(from+((event.clientX-rect.left)/rect.width*width-left)/(right-left)*span);
@@ -66,52 +69,53 @@ export const SignalRack = memo(function SignalRack({field,sites,site,mode,cursor
   };
   const active=hover&&hover.sample>=from&&hover.sample<=end?channels[hover.row]:undefined;
   const v=active&&hover?read(active,hover.sample):null;
-  const unit=quantity==='phase'?'rad':'a.u.';
+  const unit=!cortical&&quantity==='phase'?'rad':'a.u.';
   return <section className={`signal-instrument ${expanded?'rack-expanded':'rack-primary'}`} aria-label={expanded?'Expanded COVE waveform rack':'COVE waveform rack'}>
     <div className="instrument-heading"><div><h2>{expanded?'Expanded waveform rack':'COVE waveform rack'}</h2>
-      <p>{channels.length} traces · {channels.length/MODES.length} sites · {fmt(rate)} integrated samples/s</p></div>
+      <p>{channels.length} traces · {cortical?channels.length:channels.length/MODES.length} sites · {fmt(rate)} integrated samples/s</p></div>
       {children}
+      {cortical&&<button type="button" onClick={()=>{setZoom(zoom===1?15:1);seek(zoom===1?onset:0);}}>{zoom===1?'Zoom to onset':'Show recording'}</button>}
       {onExpand&&<button type="button" aria-expanded={expanded} onClick={onExpand}>{expanded?'Close expanded view':'Expand to 64 traces'}</button>}
       {expanded&&<div className="science-controls">
-        <label>Signal quantity<select value={quantity} onChange={e=>setQuantity(e.target.value as typeof quantity)}>
+        {!cortical&&<label>Signal quantity<select value={quantity} onChange={e=>setQuantity(e.target.value as typeof quantity)}>
           <option value="real">{cortical?'Excitatory deviation':'Real component'}</option><option value="imaginary">{cortical?'Inhibitory deviation':'Imaginary component'}</option>
           <option value="amplitude">{cortical?'Population-plane magnitude':'Magnitude envelope'}</option><option value="phase">{cortical?'Population-plane angle':'Wrapped phase'}</option>
-        </select></label>
+        </select></label>}
         <label>Time zoom · {zoom}×<input type="range" min="1" max="16" value={zoom} onChange={e=>setZoom(e.target.valueAsNumber)}/></label>
       </div>}
     </div>
-    <figure className="cove-figure rack-figure"><figcaption>{cortical ? ({real:'Simulated excitatory population deviation',imaginary:'Inhibitory population deviation',amplitude:'Population-plane magnitude',phase:'Population-plane angle'}[quantity]) : ({real:'Real component of rotating COVE states',imaginary:'Imaginary component',amplitude:'Magnitude envelope',phase:'Wrapped phase'}[quantity])}
+    <figure className="cove-figure rack-figure"><figcaption>{cortical?'Simulated LFP proxy · common average':({real:'Real component of rotating COVE states',imaginary:'Imaginary component',amplitude:'Magnitude envelope',phase:'Wrapped phase'}[quantity])}
       <span>Full-rate samples · {unit} · independent row scales</span></figcaption>
       <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{height}} role="img" aria-label={`${channels.length} stacked COVE signal traces`}
         onPointerMove={e=>setHover(point(e))} onPointerLeave={()=>setHover(undefined)} onClick={e=>{
-          const p=point(e);select(channels[p.row].site);setMode(channels[p.row].mode);seek(Math.max(0,p.sample));
+          const p=point(e);select(channels[p.row].site);if(!cortical)setMode(channels[p.row].mode);seek(Math.max(0,p.sample));
         }}>
         <rect x="0" y="0" width={left} height={bottom} className="rack-label-gutter"/>
         {channels.map((r,i)=><g key={`${r.site}:${r.mode}`}>
           {r.site===site&&<rect x="0" y={top+i*dy} width={right} height={dy}
-            className={r.mode===mode?'rack-active-channel':'rack-active-site'}/>}
-          {i%4===0&&<path d={`M0 ${top+i*dy}H${right}`} className="rack-site-rule"/>}
+            className={(cortical||r.mode===mode)?'rack-active-channel':'rack-active-site'}/>}
+          {!cortical&&i%4===0&&<path d={`M0 ${top+i*dy}H${right}`} className="rack-site-rule"/>}
           <path d={`M${left} ${top+(i+.5)*dy}H${right}`} className="rack-row-rule"/>
-          <text x="7" y={top+(i+.5)*dy} dominantBaseline="central">S{r.site+1} · {bands[r.mode]} Hz</text>
+          <text x="7" y={top+(i+.5)*dy} dominantBaseline="central">S{r.site+1}{!cortical&&` · ${bands[r.mode]} Hz`}</text>
           {expanded&&<text x="78" y={top+(i+.5)*dy} dominantBaseline="central" className="rack-scale-text">{fmt(paths[i].min)}…{fmt(paths[i].max)}</text>}
         </g>)}
         <path d={`M${left} ${top}V${bottom}H${right}`} className="rack-axis"/>
         {ticks.map(t=>{
-          const tickX=x(t*rate/1000-1);
+          const tickX=x(t*rate/1000-timeOffset);
           return <g key={t}><path d={`M${tickX} ${top}V${bottom+4}`} className="rack-time-rule"/>
             <text x={tickX} y={bottom+16} className="rack-scale-text" textAnchor="middle">{fmt(t)}</text></g>;
         })}
         <text x={right+13} y={bottom+16} className="rack-scale-text">ms</text>
         {channels.map((r,i)=><path key={`${r.site}:${r.mode}`} d={paths[i].d} className="trace"/>)}
-        {from===-1&&<line x1={x(-1)} x2={x(-1)} y1={top} y2={bottom} className="rack-onset"/>}
+        {from<=-timeOffset&&end>=-timeOffset&&<line x1={x(-timeOffset)} x2={x(-timeOffset)} y1={top} y2={bottom} className="rack-onset"/>}
         <line x1={x(cursor)} x2={x(cursor)} y1={top} y2={bottom} className="rack-cursor"/>
         {active&&hover&&<line x1={x(hover.sample)} x2={x(hover.sample)} y1={top} y2={bottom} className="rack-hover"/>}
       </svg>
       <p className="rack-readout">{active&&hover ?
-        `Site ${active.site+1} · ${bands[active.mode]} Hz · ${fmt((hover.sample+1)/rate*1000)} ms · ${v===null?'undefined':fmt(v)} ${unit}` :
+        `Site ${active.site+1} · ${cortical?'LFP':`${bands[active.mode]} Hz`} · ${fmt((hover.sample+timeOffset)/rate*1000)} ms · ${v===null?'undefined':fmt(v)} ${unit}` :
         '0 ms marks stimulus onset. Hover for exact samples. Click a row to select its site, channel and time.'}</p>
     </figure>
-    {expanded&&<p>{cortical ? 'The frequency labels are nominal resonance settings. Angle describes the E–I state plane. Each row uses its own vertical scale.' : 'The real and imaginary components retain every integrated sample. Hover values retain the original units.'}</p>}
+    {expanded&&<p>{cortical ? 'Each channel combines modeled synaptic activity at one retinotopic site. Values use arbitrary units. Each row uses its own vertical scale.' : 'The real and imaginary components retain every integrated sample. Hover values retain the original units.'}</p>}
   </section>;
 });
 

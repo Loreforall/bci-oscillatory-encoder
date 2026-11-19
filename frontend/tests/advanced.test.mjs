@@ -240,3 +240,40 @@ test('deterministic cortical populations respond to onset, contrast, orientation
   altered.detail[m*4]=edge+1;
   assert.notDeepEqual(result.field,run([altered]).field);
 });
+
+test('continuous observations preserve the counterfactual baseline and sustain image-dependent activity', async () => {
+  const {corticalRecording,recordingSites}=await import('../lib/cortical-recording.ts');
+  const derive=inputs=>analyzeCove(inputs,24,[2,2],true).rows;
+  const photo=derive([frames[0]]), gray=derive([new Uint8Array(frames[0].length).fill(128)]);
+  const a=corticalRecording(photo,24), b=corticalRecording(gray,24), c=corticalRecording(photo,24,99);
+  assert.equal(a.count,1440);
+  assert.equal(a.rate,480);
+  assert.equal(a.onset,240);
+  const baselineEnd=(a.onset+Math.round(.018*a.rate))*a.sites;
+  assert.deepEqual(a.field.subarray(0,baselineEnd),b.field.subarray(0,baselineEnd));
+  assert.deepEqual(a.field,corticalRecording(photo,24).field);
+  assert.notDeepEqual(a.field.subarray(0,200),c.field.subarray(0,200));
+  const rms=x=>Math.sqrt(x.reduce((sum,v)=>sum+v*v,0)/x.length);
+  assert.ok(rms(a.field.subarray(0,baselineEnd))>.01);
+  assert.ok(rms(a.field.subarray(-240*a.sites))>.01);
+  assert.ok(rms(a.field.subarray(baselineEnd).map((v,k)=>v-b.field[k+baselineEnd]))>.01);
+  for(let t=0;t<a.count;t++){
+    const row=a.field.subarray(t*a.sites,(t+1)*a.sites);
+    assert.ok(row.every(v=>Number.isFinite(v)&&Math.abs(v)<3));
+    assert.ok(Math.abs(row.reduce((x,y)=>x+y,0))<1e-12);
+  }
+  const video=corticalRecording(derive(frames),24);
+  assert.equal(video.count,video.onset+100);
+  assert.equal(recordingSites(256,119,false).length,32);
+  assert.equal(recordingSites(256,119,true).length,64);
+  assert.ok(recordingSites(256,119,false).includes(119));
+});
+
+test('observation spectral diagnostics locate a narrowband tone and bound coherence', async () => {
+  const {recordingSpectra}=await import('../lib/recording-spectra.ts');
+  const field=Float64Array.from({length:2048},(_,k)=>(k%2?-.4:1)*Math.sin(Math.floor(k/2)*Math.PI/8));
+  const {psd,hz,coherence}=recordingSpectra(field,2,0,1,0,1024,480);
+  assert.equal(hz[psd.indexOf(Math.max(...psd))],30);
+  assert.ok(coherence.every(v=>v>=0&&v<=1));
+  assert.ok(coherence[16]>.999);
+});

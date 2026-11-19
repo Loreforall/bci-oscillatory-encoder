@@ -7,7 +7,8 @@ import { imageError, refineCode } from '../lib/cove-reconstruction';
 import { fieldCsv, fieldJson } from '../lib/cove-export';
 import type { Input, Result } from '../lib/encoder';
 import { playbackFrame, playbackSample } from '../lib/cove-playback';
-import { corticalResponse, CORTICAL_BANDS, CORTICAL_SUBSTEPS } from '../lib/cortical';
+import { corticalRecording } from '../lib/cortical-recording';
+import RecordingAnalysis from './recording-analysis';
 import { AlignedMap, FeatureAtlas, SignalRack } from './cove-instrument';
 import CoveScience, { SiteOverlay } from './cove-science';
 import MeasuredErp from './measured-erp';
@@ -119,43 +120,45 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
   const analysis = useMemo(() => analyzeCove(frames, source.fps, slopes, true, side), [frames, source.fps, slopes, side]);
   const {rows, internal, internalRate, stepsPerFrame, field, sites} = analysis;
   const cortical=Boolean(home)&&pathway==='cortical';
-  const response=useMemo(()=>cortical?corticalResponse(rows,internalRate,stepsPerFrame):undefined,
-    [cortical,rows,internalRate,stepsPerFrame]);
-  const cursorMatchesFrame = playbackFrame(cursor, stepsPerFrame) === frame;
-  const sample = cursorMatchesFrame ? cursor : frame * stepsPerFrame;
+  const response=useMemo(()=>cortical?corticalRecording(rows,source.fps,undefined,source.kind==='images'&&frames.length===1):undefined,
+    [cortical,rows,source.fps,source.kind,frames.length]);
+  const clockRate=response?.rate??internalRate, clockCount=response?.count??internal.length;
+  const onset=response?.onset??0;
+  const frameAt=useCallback((position:number)=>response
+    ? Math.min(frames.length-1,Math.floor(Math.max(0,position-onset)*source.fps/clockRate))
+    : playbackFrame(position,stepsPerFrame),[response,frames.length,onset,clockRate,source.fps,stepsPerFrame]);
+  const clockSample=Math.min(cursor,clockCount-1);
+  const stimulusTime=(clockSample-onset)/clockRate;
+  const sample=response?Math.min((frame+1)*stepsPerFrame-1,internal.length-1)
+    : playbackFrame(clockSample,stepsPerFrame)===frame?clockSample:frame*stepsPerFrame;
 
-  useEffect(() => {
-    if (!playing) return;
-    if (!cursorMatchesFrame) {
-      setPlaying(false);
-      return;
-    }
-    let request = 0;
-    let start: number | undefined;
-    const from = clockStart.current;
-    const tick = (now: number) => {
-      start ??= now;
-      const elapsed = now-start;
-      const loopDuration = internal.length / internalRate * 1000;
-      const next = home?.example
-        ? playbackSample(0, (from/internalRate*1000+elapsed) % loopDuration, internalRate, internal.length)
-        : playbackSample(from, elapsed, internalRate, internal.length);
+  useEffect(()=>{
+    if(!playing)return;
+    let request=0, start:number|undefined;
+    const from=Math.min(clockStart.current,clockCount-1);
+    const tick=(now:number)=>{
+      start??=now;
+      const elapsed=now-start;
+      const next=home?.example
+        ? playbackSample(0,(from/clockRate*1000+elapsed)%(clockCount/clockRate*1000),clockRate,clockCount)
+        : playbackSample(from,elapsed,clockRate,clockCount);
       setCursor(next);
-      onFrameChange(playbackFrame(next, stepsPerFrame));
-      if (home?.example || next < internal.length-1) request = requestAnimationFrame(tick);
+      onFrameChange(frameAt(next));
+      if(home?.example||next<clockCount-1)request=requestAnimationFrame(tick);
       else setPlaying(false);
     };
-    request = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(request);
-  }, [playing, internalRate, internal.length, stepsPerFrame, onFrameChange, cursorMatchesFrame, home?.example]);
+    request=requestAnimationFrame(tick);
+    return ()=>cancelAnimationFrame(request);
+  },[playing,clockRate,clockCount,frameAt,onFrameChange,home?.example]);
 
-  const seek = useCallback((next: number) => {
-    const index = Math.min(internal.length-1,Math.max(0,next));
+  const seek=useCallback((next:number)=>{
+    const index=Math.min(clockCount-1,Math.max(0,next));
     setPlaying(false);
     setCursor(index);
-    onFrameChange(playbackFrame(index, stepsPerFrame));
-  }, [internal.length, onFrameChange, stepsPerFrame]);
+    onFrameChange(frameAt(index));
+  },[clockCount,onFrameChange,frameAt]);
 
+  const seekReference=(value:number)=>seek(response?onset+Math.round(value/internalRate*clockRate):value);
   const modeTrace = useMemo(() => Array.from({length: internal.length}, (_, t) =>
     field![(t*sites.length*MODES.length + site*MODES.length + mode)*2]),
     [field, internal.length, site, mode, sites.length]);
@@ -165,16 +168,10 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
   };
   const row = rows[frame];
   const rackProps={
-    field:response?.field??field!,sites,site,mode,cortical,
-    cursor:cortical?(sample+1)*CORTICAL_SUBSTEPS-1:sample,
-    rate:response?.rate??internalRate,count:response?.count??internal.length,
-    seek:(value:number)=>seek(cortical?Math.floor(value/CORTICAL_SUBSTEPS):value),
-    select:setSite,setMode,
+    field:response?.field??field!,sites,site,mode,cortical,onset,
+    cursor:clockSample,rate:clockRate,count:clockCount,seek,select:setSite,setMode,
   };
-  const responseMagnitude=response && sites.map((_,i)=>{
-    const offset=(rackProps.cursor*sites.length*MODES.length+i*MODES.length+mode)*2;
-    return Math.hypot(response.field[offset],response.field[offset+1]);
-  });
+  const responseValue=response && sites.map((_,i)=>response.field[clockSample*sites.length+i]);
   const windowStart = Math.floor(frame / 8) * 8;
   const referenceRows = useMemo(() => side === GRID ? rows :
     analyzeCove(frames, source.fps, slopes, true).rows, [frames,source.fps,slopes,side,rows]);
@@ -273,7 +270,7 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
           <span>Site {site+1} · x {metric(sites[site].x)}, y {metric(sites[site].y)} px on the 64 × 64 input</span>
         </div>
         <p className="hint">Highlighted pixels are the bilinear sampling taps for the selected location. Local image filters also use surrounding pixels. The markers indicate sampling locations.</p>
-        <AlignedMap title={cortical?`${CORTICAL_BANDS[mode]} Hz nominal · E–I magnitude`:`${MODES[mode]} Hz whole scene amplitude`} unit="a.u." sites={sites} values={responseMagnitude??magnitude} site={site} select={setSite}/>
+        <AlignedMap title={cortical?'Absolute common-referenced LFP proxy':`${MODES[mode]} Hz whole scene amplitude`} unit="a.u." sites={sites} values={responseValue?.map(Math.abs)??magnitude} site={site} select={setSite}/>
         <dl className="hero-site-readout">
           <dt>Local luminance</dt><dd>{metric(row.brightness[site])}</dd>
           <dt>Local contrast</dt><dd>{metric(row.contrast[site])}</dd>
@@ -281,16 +278,16 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
           <dt>Selected mode input magnitude</dt><dd>{metric(Math.hypot(...row.drive[site][mode]))}</dd>
           <dt>COVE {MODES[mode]} Hz amplitude</dt><dd>{metric(magnitude[site])} a.u.</dd>
           <dt>COVE {MODES[mode]} Hz phase</dt><dd>{phase[site]===null?'undefined':`${metric(phase[site]!)} rad`}</dd>
-          {cortical&&<><dt>Modeled population magnitude</dt><dd>{metric(responseMagnitude![site])} a.u.</dd></>}
+          {cortical&&<><dt>Simulated LFP proxy</dt><dd>{metric(responseValue![site])} a.u.</dd></>}
         </dl>
-        <p className="demo-caption">{sites.length} independently computed sites. The higher resolution fields are computational extensions. Reported EEG results use the verified reference field.</p>
+        <p className="demo-caption">{sites.length} computed retinotopic sites. The higher resolution fields are computational extensions. Reported EEG results use the verified reference field.</p>
       </div>
       <SignalRack key={`primary-${resetVersion}`} {...rackProps} onExpand={()=>{
           setExpanded(true);
           requestAnimationFrame(()=>document.getElementById('expanded-waveforms')?.scrollIntoView({block:'start'}));
         }}>
-        <label className="pathway-select">Signal pathway <select value={pathway} onChange={event=>setPathway(event.target.value as typeof pathway)}>
-          <option value="cortical">Modeled cortical response</option>
+        <label className="pathway-select">Signal pathway <select value={pathway} onChange={event=>{seek(0);setPathway(event.target.value as typeof pathway);}}>
+          <option value="cortical">Simulated cortical LFP proxy</option>
           <option value="encoded">COVE encoded states</option>
         </select></label>
       </SignalRack>
@@ -299,9 +296,9 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
       <button onClick={() => {
         if (playing) setPlaying(false);
         else {
-          clockStart.current = sample >= internal.length-1 ? 0 : sample;
+          clockStart.current = clockSample >= clockCount-1 ? 0 : clockSample;
           setCursor(clockStart.current);
-          onFrameChange(playbackFrame(clockStart.current, stepsPerFrame));
+          onFrameChange(frameAt(clockStart.current));
           setPlaying(true);
         }
       }}>{playing ? 'Pause' : 'Play'}</button>
@@ -310,10 +307,10 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
         seek(0); setSite(Math.floor((side-1)/2)*(side+1)); setMode(0); setScale(0); setPathway('cortical'); setExpanded(false); setOverlay(true);
         setResetVersion(value=>value+1);
       }}>Reset View</button>}
-      <label>Playback timeline <input type="range" min="0" max={internal.length-1} value={sample}
-        aria-valuetext={`${metric((sample+1)/internalRate)} seconds, input frame ${frame+1}`}
+      <label>Playback timeline <input type="range" min="0" max={clockCount-1} value={clockSample}
+        aria-valuetext={`${metric(response?stimulusTime:(sample+1)/internalRate)} seconds, input frame ${frame+1}`}
         onChange={event => seek(event.target.valueAsNumber)}/></label>
-      <output aria-live="off">{metric((sample+1)/internalRate)} s · frame {frame+1}/{frames.length}</output>
+      <output aria-live="off">{metric(response?stimulusTime:(sample+1)/internalRate)} s · frame {frame+1}/{frames.length}</output>
     </div>
     <div className="cove-controls">
       {!home && "processed_frames_sha256" in source && <><button onClick={() => download(fieldJson(analysis, source, slopes, activeModel ? {
@@ -336,8 +333,8 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
       <label>Site <select value={site} onChange={event => setSite(Number(event.target.value))}>
         {sites.map((_, index) => <option key={index} value={index}>{index+1}</option>)}
       </select></label>
-      <label>{cortical?'Nominal resonance':'Mode'} <select value={mode} onChange={event => setMode(Number(event.target.value))}>
-        {(cortical?CORTICAL_BANDS:MODES).map((hz, index) => <option key={hz} value={index}>{hz} Hz</option>)}
+      <label>{cortical?'COVE reference mode':'Mode'} <select value={mode} onChange={event => setMode(Number(event.target.value))}>
+        {MODES.map((hz, index) => <option key={hz} value={index}>{hz} Hz</option>)}
       </select></label>
       {(home || view === 'analysis') && <label>Haar scale <select value={scale} onChange={event => setScale(Number(event.target.value))}>
         {HAAR_SCALES.map((size, index) => <option key={size} value={index}>{size}+{size} frames</option>)}
@@ -372,11 +369,12 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
           }}/>
       </div>}
       {home.upload}
+      {response&&<RecordingAnalysis recording={response} site={site}/>}
       <MeasuredErp/>
       <FeatureAtlas key={`atlas-${resetVersion}`} rgb={frames[frame]} sites={sites} site={site} select={setSite}
         brightness={row.brightness} contrast={row.contrast} detail={row.detail}/>
       <CoveScience key={resetVersion} field={field!} count={internal.length} rate={internalRate} sample={sample}
-        site={site} mode={mode} row={row} rows={rows} geometry={sites} select={setSite} setMode={setMode} seek={seek}/>
+        site={site} mode={mode} row={row} rows={rows} geometry={sites} select={setSite} setMode={setMode} seek={seekReference}/>
       <section className="science-stack"><h2>Visual Feature Maps</h2>
         <p>Fourier bands summarize the entire image. Contrast, orientation drive and signed Haar detail are local feature maps on the modeled grid.</p>
         <div className="plot-grid">

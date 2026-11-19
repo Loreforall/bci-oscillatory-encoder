@@ -1,0 +1,56 @@
+{
+  "alternate_condition": "00001_aircraft_carrier",
+  "rate_hz": 480,
+  "baseline_s": 0.5,
+  "same_seed_baselines_equal": true,
+  "stimulus_rms": 0.2985283732144216,
+  "stimulus_difference_vs_gray": 0.14945328305302116,
+  "stimulus_difference_vs_other": 0.08453904228093105,
+  "seed_difference": 0.4022934956724944,
+  "final_half_second_rms": 0.29584165996242795,
+  "maximum_absolute_sample": 1.5059504631349103,
+  "bands_hz": [
+    [
+      2,
+      8
+    ],
+    [
+      8,
+      14
+    ],
+    [
+      14,
+      30
+    ],
+    [
+      30,
+      46
+    ],
+    [
+      46,
+      86
+    ]
+  ],
+  "simulated_proxy_750ms": {
+    "relative_band_power": [
+      0.13807517961146168,
+      0.2768112823658905,
+      0.38950943192043663,
+      0.14302061910877872,
+      0.05258348699343256
+    ],
+    "median_absolute_channel_correlation": 0.1138916572284722,
+    "median_temporal_sd": 0.3098522932116118
+  },
+  "measured_eeg_750ms": {
+    "relative_band_power": [
+      0.36181778101165823,
+      0.34821825601304707,
+      0.17788529575080422,
+      0.056236136497508554,
+      0.055842530726981976
+    ],
+    "median_absolute_channel_correlation": 0.36865347623825073,
+    "median_temporal_sd": 0.42874911427497864
+  }
+}
