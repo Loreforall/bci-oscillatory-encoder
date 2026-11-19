@@ -268,5 +268,3 @@ h2,h3,legend,.demo-nav > span,.demo-nav small,.demo-intro .research-label,
 .research-overview h3,.science-stack h2,.instrument-heading h2,
 .signal-instrument .instrument-heading p { font-family:var(--sans); }
 h2,h3,legend { text-transform:none; }
-.pathway-select { align-self:center; font-size:11px; }
-.pathway-select select { display:block; color:#173047; background:#f3f8fc; }

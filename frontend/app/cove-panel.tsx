@@ -94,7 +94,6 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
   home?: {label: string; example: boolean; upload: ReactNode}; startAdvanced?: boolean;
 }) {
   const [view, setView] = useState<'demo' | 'analysis'>(startAdvanced ? 'analysis' : 'demo');
-  const [pathway,setPathway]=useState<'cortical'|'encoded'>('cortical');
   const [expanded, setExpanded] = useState(false);
   const [overlay, setOverlay] = useState(true);
   const [resetVersion, setResetVersion] = useState(0);
@@ -119,7 +118,7 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
   const slopes = activeModel?.coupling ?? DEFAULT_SLOPES;
   const analysis = useMemo(() => analyzeCove(frames, source.fps, slopes, true, side), [frames, source.fps, slopes, side]);
   const {rows, internal, internalRate, stepsPerFrame, field, sites} = analysis;
-  const cortical=Boolean(home)&&pathway==='cortical';
+  const cortical=Boolean(home);
   const response=useMemo(()=>cortical?corticalRecording(rows,source.fps,undefined,source.kind==='images'&&frames.length===1):undefined,
     [cortical,rows,source.fps,source.kind,frames.length]);
   const clockRate=response?.rate??internalRate, clockCount=response?.count??internal.length;
@@ -285,12 +284,7 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
       <SignalRack key={`primary-${resetVersion}`} {...rackProps} onExpand={()=>{
           setExpanded(true);
           requestAnimationFrame(()=>document.getElementById('expanded-waveforms')?.scrollIntoView({block:'start'}));
-        }}>
-        <label className="pathway-select">Signal pathway <select value={pathway} onChange={event=>{seek(0);setPathway(event.target.value as typeof pathway);}}>
-          <option value="cortical">Simulated cortical LFP proxy</option>
-          <option value="encoded">COVE encoded states</option>
-        </select></label>
-      </SignalRack>
+        }}/>
     </div>}
     <div className="cove-transport" aria-label="COVE playback controls">
       <button onClick={() => {
@@ -304,7 +298,7 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
       }}>{playing ? 'Pause' : 'Play'}</button>
       <button onClick={() => seek(0)}>Reset playback</button>
       {home && <button onClick={() => {
-        seek(0); setSite(Math.floor((side-1)/2)*(side+1)); setMode(0); setScale(0); setPathway('cortical'); setExpanded(false); setOverlay(true);
+        seek(0); setSite(Math.floor((side-1)/2)*(side+1)); setMode(0); setScale(0); setExpanded(false); setOverlay(true);
         setResetVersion(value=>value+1);
       }}>Reset View</button>}
       <label>Playback timeline <input type="range" min="0" max={clockCount-1} value={clockSample}
