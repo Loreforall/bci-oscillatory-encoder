@@ -143,3 +143,35 @@ test('visualization projections preserve complex samples, graph weights and circ
   assert.ok(Math.abs(phaseDifference(Math.PI-.1,-Math.PI+.1)+.2)<1e-12);
   assert.equal(phaseDifference(null,0),null);
 });
+
+test('expanded grids match Python at distributed integration samples and use normalized local weights', () => {
+  const expected = JSON.parse(readFileSync(new URL('./expanded-reference.json', import.meta.url)));
+  for (const side of [10,16]) {
+    const result=analyzeCove(frames,24,[2,2],true,side);
+    const n=side*side;
+    assert.equal(result.sites.length,n);
+    assert.equal(result.field.length,result.internal.length*n*8);
+    assert.ok(result.field.every(Number.isFinite));
+    const indices=[0,n/2,n-1];
+    expected[String(side)].forEach((step,t)=>step.forEach((modes,j)=>modes.forEach((pair,k)=>{
+      const offset=(t*n*4+indices[j]*4+k)*2;
+      assert.ok(Math.abs(result.field[offset]-pair[0])<1e-8);
+      assert.ok(Math.abs(result.field[offset+1]-pair[1])<1e-8);
+    })));
+    for(const row of result.rows) row.weights.forEach((edges,i)=>{
+      assert.ok(edges.length>=3 && edges.length<=5);
+      assert.ok(Math.abs(edges.reduce((sum,e)=>sum+e.weight,0)-1)<1e-12);
+      assert.ok(edges.every(e=>Math.abs(i%side-e.j%side)+Math.abs(Math.floor(i/side)-Math.floor(e.j/side))<=1));
+      assert.ok(row.state[i].every(([re,im])=>Math.hypot(re,im)<=1));
+    });
+  }
+});
+
+test('inverse Fourier display bands reconstruct the non DC image', async () => {
+  const {spatialBand}=await import('../lib/features.ts');
+  const {gray,FOURIER_EDGES}=await import('../lib/cove.ts');
+  const input=gray(frames[0]), edges=[0,...FOURIER_EDGES,1];
+  const bands=edges.slice(0,-1).map((v,i)=>spatialBand(input,v,edges[i+1]));
+  const mean=input.reduce((a,b)=>a+b,0)/input.length;
+  assert.ok(input.every((value,i)=>Math.abs(value-mean-bands.reduce((sum,band)=>sum+band[i],0))<1e-12));
+});

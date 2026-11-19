@@ -40,26 +40,47 @@ function fft(real: Float64Array, imaginary: Float64Array) {
   }
 }
 
-export function spatialPower(gray: ArrayLike<number>, normalize = 1) {
-  const real = Float64Array.from(gray, value => value / normalize);
-  const imaginary = new Float64Array(PIXELS);
+function fft2(real: Float64Array, imaginary: Float64Array) {
   for (let y = 0; y < SIZE; y++) {
     const start = y * SIZE;
     fft(real.subarray(start, start + SIZE), imaginary.subarray(start, start + SIZE));
   }
   const columnReal = new Float64Array(SIZE);
   const columnImaginary = new Float64Array(SIZE);
-  const power = new Float64Array(PIXELS);
   for (let x = 0; x < SIZE; x++) {
     for (let y = 0; y < SIZE; y++) {
       columnReal[y] = real[y * SIZE + x];
       columnImaginary[y] = imaginary[y * SIZE + x];
     }
     fft(columnReal, columnImaginary);
-    for (let y = 0; y < SIZE; y++) power[y * SIZE + x] = columnReal[y] ** 2 + columnImaginary[y] ** 2;
+    for (let y = 0; y < SIZE; y++) {
+      real[y*SIZE+x]=columnReal[y];
+      imaginary[y*SIZE+x]=columnImaginary[y];
+    }
   }
+}
+
+export function spatialPower(gray: ArrayLike<number>, normalize = 1) {
+  const real = Float64Array.from(gray, value => value / normalize);
+  const imaginary = new Float64Array(PIXELS);
+  fft2(real,imaginary);
+  const power=real.map((v,i)=>v*v+imaginary[i]*imaginary[i]);
   power[0] = 0;
   return power;
+}
+
+/** Signed inverse Fourier projection of the selected non DC annulus. */
+export function spatialBand(frame: ArrayLike<number>, low: number, high: number) {
+  const real=Float64Array.from(frame), imaginary=new Float64Array(PIXELS);
+  fft2(real,imaginary);
+  for(let i=0;i<PIXELS;i++){
+    const x=i%SIZE,y=Math.floor(i/SIZE);
+    const radius=Math.hypot(Math.min(x,SIZE-x),Math.min(y,SIZE-y))/SIZE;
+    if(i===0||radius<low||radius>=high){real[i]=0;imaginary[i]=0;}
+    else imaginary[i]=-imaginary[i];
+  }
+  fft2(real,imaginary);
+  return real.map(x=>x/PIXELS);
 }
 
 function spatialEnergy(gray: Uint8Array) {

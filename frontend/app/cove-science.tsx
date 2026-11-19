@@ -1,7 +1,7 @@
 'use client';
 
 import { memo, useMemo, useState } from 'react';
-import { analyzeCove, crossMode, MODES, sites, samplingTaps, spectrogram, spectrumWindowLength } from '../lib/cove';
+import { analyzeCove, crossMode, MODES, type Site, samplingTaps, spectrogram, spectrumWindowLength } from '../lib/cove';
 import { fieldIndex, MODE_COLORS, modeTrajectory, phaseDifference, polar, spatialMatrix } from '../lib/cove-visualization';
 
 const fmt = (n: number) => Number(n.toPrecision(4)).toString();
@@ -70,45 +70,39 @@ export const ScientificPlot = memo(function ScientificPlot({title, unit, series,
   </figure>;
 });
 
-export function SiteOverlay({site, select, taps = false}: {site:number;select:(site:number)=>void;taps?:boolean}) {
+export function SiteOverlay({geometry: sites, site, select, taps = false}: {geometry:Site[];site:number;select:(site:number)=>void;taps?:boolean}) {
   return <svg className="site-overlay" viewBox="0 0 64 64" preserveAspectRatio="none"
     aria-label="Retinotopic samples on visual input">
-    {taps && samplingTaps(site).map(({x,y,weight})=><rect key={`${x},${y}`} x={x} y={y} width="1" height="1"
+    {taps && samplingTaps(site,Math.sqrt(sites.length)).map(({x,y,weight})=><rect key={`${x},${y}`} x={x} y={y} width="1" height="1"
       fill="#69f2da" opacity={.25+.75*weight}><title>{`Sampling pixel (${x}, ${y}) · bilinear weight ${fmt(weight)}`}</title></rect>)}
     {sites.map((point,i)=><g key={i} role="button" tabIndex={0} aria-label={`Select visual site ${i+1}`}
       aria-pressed={i===site} onClick={()=>select(i)} onKeyDown={event=>{
         if (event.key==='Enter' || event.key===' ') {event.preventDefault();select(i);}
-      }}><circle cx={point.x+.5} cy={point.y+.5} r="2.35" fill="transparent"/>
-      <circle className="site-spot" cx={point.x+.5} cy={point.y+.5} r={i===site?1.3:.73}
+      }}><circle cx={point.x+.5} cy={point.y+.5} r={sites.length>100?1.05:2.35} fill="transparent"/>
+      <circle className="site-spot" cx={point.x+.5} cy={point.y+.5} r={i===site?1.3:sites.length>100?.38:.73}
         fill={i===site?'#ffe397':'#e1f9ff'} stroke="#142e46" strokeWidth=".45"><title>{`Site ${i+1} · x ${fmt(point.x)}, y ${fmt(point.y)} pixels`}</title></circle></g>)}
   </svg>;
 }
 
-const fieldGrid = Array.from({length: 24**2}, (_, i) => {
-  const x=(i%24+.5)*64/24,y=(Math.floor(i/24)+.5)*64/24;
-  const weights=sites.map(p=>1/(4+(p.x+.5-x)**2+(p.y+.5-y)**2));
-  const mass=weights.reduce((a,b)=>a+b,0);
-  return weights.map(w=>w/mass);
-});
 const phaseColor = (phase:number|null) => phase===null ? '#737f89' : `hsl(${(phase+Math.PI)/Math.PI*180+210} 66% 48%)`;
 
-function SpatialMap({states,site,select,peak,phase=false}: {
+function SpatialMap({geometry: sites,states,site,select,peak,phase=false}: {
+  geometry:Site[];
   states: {amplitude:number;phase:number|null;real:number;imaginary:number}[];
   site:number;select:(i:number)=>void;peak:number;phase?:boolean;
 }) {
   return <figure className="cove-figure spatial-science"><figcaption>{phase?'Spatial phase':'Spatial amplitude'}
-    <span>{phase?'Computed sites only':'Interpolated color and computed sites'}</span></figcaption>
+    <span>{phase?'Computed sites only':'Computed amplitudes'}</span></figcaption>
     <div className="spatial-square">
-      <svg viewBox="0 0 64 64" role="img" aria-label={phase?'Phase at 25 sites':'Interpolated amplitude across 25 sites'}>
-        {!phase && fieldGrid.map((w,i)=>{
-          const a=w.reduce((sum,v,j)=>sum+v*states[j].amplitude,0)/peak;
-          return <rect key={i} x={i%24*64/24} y={Math.floor(i/24)*64/24} width={64/24+.04} height={64/24+.04}
-            fill={`hsl(${204-32*a} 70% ${94-58*a}%)`}/>;
+      <svg viewBox="0 0 64 64" role="img" aria-label={phase?'Phase at sampled sites':'Amplitude at sampled sites'}>
+        {sites.map((p,i)=>{
+          const level=states[i].amplitude/peak;
+          return <circle key={i} cx={p.x+.5} cy={p.y+.5} r={site===i?1.55:sites.length>100?.87:1.2}
+            fill={phase?phaseColor(states[i].phase):`hsl(${204-32*level} 70% ${94-58*level}%)`}
+            stroke={site===i?'#a65f18':'#214965'} strokeWidth={site===i?.75:.24}/>;
         })}
-        {sites.map((p,i)=><circle key={i} cx={p.x+.5} cy={p.y+.5} r={site===i?1.7:1.15}
-          fill={phase?phaseColor(states[i].phase):'#fff'} stroke={site===i?'#b75f24':'#214965'} strokeWidth={site===i?.8:.35}/>)}
       </svg>
-      <SiteOverlay site={site} select={select}/>
+      <SiteOverlay geometry={sites} site={site} select={select}/>
     </div>
     <div className={phase?'science-scale phase-scale':'science-scale'}>
       <span>{phase?'−π rad':'0 a.u.'}</span><i/><span>{phase?'+π rad':`${fmt(peak)} a.u.`}</span>
@@ -123,15 +117,22 @@ function Matrix({title, data, labels, selected, onSelect, unit}: {
   const [hover,setHover]=useState<[number,number]>();
   const n=data.length, cell=250/n, maximum=Math.max(1e-9,...data.flat().map(x=>Math.abs(x??0)));
   const pair=hover ?? [selected,selected], value=data[pair[0]][pair[1]];
+  const coordinates=(event:React.PointerEvent<SVGSVGElement>|React.MouseEvent<SVGSVGElement>):[number,number]|undefined=>{
+    const bounds=event.currentTarget.getBoundingClientRect();
+    const x=Math.floor(((event.clientX-bounds.left)/bounds.width*290-30)/cell);
+    const y=Math.floor(((event.clientY-bounds.top)/bounds.height*287-24)/cell);
+    return x>=0&&x<n&&y>=0&&y<n?[y,x]:undefined;
+  };
   return <figure className="cove-figure science-matrix"><figcaption>{title}<span>{unit}</span></figcaption>
-    <svg viewBox="0 0 290 287" role="img" aria-label={title} onPointerLeave={()=>setHover(undefined)}>
-      {data.flatMap((row,i)=>row.map((v,j)=><rect key={i*n+j} x={30+j*cell} y={24+i*cell} width={cell} height={cell}
-        fill={v===null?'#edf1f4':v<0?`rgba(159,83,39,${.15+.85*Math.abs(v)/maximum})`:
-          `rgba(20,105,153,${v===0?.03:.13+.87*v/maximum})`}
-        onPointerEnter={()=>setHover([i,j])} onClick={onSelect?()=>onSelect(i):undefined}
-        stroke={i===selected?'#d4aa65':'#f7fbff'} strokeWidth={n===4?1:.45}>
-        <title>{`Target ${labels[i]} · source ${labels[j]} · ${v===null?'no direct link':fmt(v)}`}</title></rect>))}
-      {labels.map((label,i)=>(n===4 || i%4===0 || i===selected) && <g key={i}>
+    <svg viewBox="0 0 290 287" preserveAspectRatio="none" role="img" aria-label={title}
+      onPointerMove={event=>setHover(coordinates(event))} onPointerLeave={()=>setHover(undefined)}
+      onClick={event=>{const point=coordinates(event);if(point)onSelect?.(point[0]);}}>
+      <rect x="30" y="24" width="250" height="250" fill="#edf3f7"/>
+      {data.flatMap((row,i)=>row.flatMap((v,j)=>v===null||v===0?[]:[<rect key={i*n+j}
+        x={30+j*cell} y={24+i*cell} width={cell} height={cell}
+        fill={v<0?`rgba(159,83,39,${.15+.85*Math.abs(v)/maximum})`:`rgba(20,105,153,${.13+.87*v/maximum})`}/>]))}
+      <rect x="30" y={24+selected*cell} width="250" height={cell} fill="none" stroke="#c79548" strokeWidth=".6"/>
+      {labels.map((label,i)=>(n===4 || i%Math.ceil(n/6)===0 || i===selected) && <g key={i}>
         <text x={30+(i+.5)*cell} y="18" textAnchor="middle">{label}</text>
         <text x="23" y={24+(i+.5)*cell+3} textAnchor="end">{label}</text>
       </g>)}
@@ -167,30 +168,53 @@ const SiteSpectrogram = memo(function SiteSpectrogram({power,rate,windowSize,see
   </figure>;
 });
 
-const EvolutionCells = memo(function EvolutionCells({field, count, mode, rate, peak, seek, select}: {
-  field:Float64Array; count:number; mode:number; rate:number; peak:number;
+const EvolutionCells = memo(function EvolutionCells({field, count, mode, rate, peak, seek, select, siteCount}: {
+  field:Float64Array; count:number; mode:number; rate:number; peak:number; siteCount:number;
   seek:(i:number)=>void;select:(i:number)=>void;
 }) {
   const hop=Math.max(1,Math.ceil(count/180)), columns=Math.ceil(count/hop);
-  return <g>{Array.from({length:columns},(_,x)=>{
+  const groups=Array.from({length:40},():string[]=>[]);
+  for(let x=0;x<columns;x++) {
     const start=x*hop, end=Math.min(count,start+hop);
-    return sites.map((_,i)=>{
+    for(let i=0;i<siteCount;i++){
       let mean=0;
       for(let t=start;t<end;t++){
-        const offset=fieldIndex(t,i,mode);
+        const offset=fieldIndex(t,i,mode,siteCount);
         mean+=Math.hypot(field[offset],field[offset+1]);
       }
       mean/=(end-start);
-      return <rect key={x*sites.length+i} x={44+694*start/count} y={14+i*4.8}
-        width={694*(end-start)/count+.12} height="4.8" fill={`hsl(199 67% ${94-59*mean/peak}%)`}
-        onClick={()=>{select(i);seek(Math.floor((start+end-1)/2));}}>
-        <title>{`Site ${i+1} · ${fmt((start+1)/rate)} to ${fmt(end/rate)} s · ${fmt(mean)} a.u.`}</title>
-      </rect>;
-    });
-  })}</g>;
+      const level=Math.min(39,Math.round(39*mean/peak));
+      groups[level].push(`M${(44+694*start/count).toFixed(2)} ${(14+i*120/siteCount).toFixed(2)}h${(694*(end-start)/count+.13).toFixed(2)}v${(120/siteCount+.06).toFixed(2)}h-${(694*(end-start)/count+.13).toFixed(2)}z`);
+    }
+  }
+  return <g>{groups.map((paths,i)=><path key={i} d={paths.join('')} fill={`hsl(199 67% ${94-59*i/39}%)`}/>)}
+    <rect x="44" y="14" width="694" height="120" fill="transparent" onClick={event=>{
+      const b=event.currentTarget.getBoundingClientRect();
+      const i=Math.min(siteCount-1,Math.max(0,Math.floor((event.clientY-b.top)/b.height*siteCount)));
+      const t=Math.min(count-1,Math.max(0,Math.floor((event.clientX-b.left)/b.width*count)));
+      select(i);seek(t);
+    }}><title>{`Select a site and time across ${fmt(count/rate)} seconds`}</title></rect>
+  </g>;
 });
 
-export default function CoveScience({field, count, rate, sample, site, mode, row, rows, select, setMode, seek}: {
+const ModeHeatmap=memo(function ModeHeatmap({values,count,rate,seek}: {values:number[][];count:number;rate:number;seek:(n:number)=>void}) {
+  const max=Math.max(1e-9,...values.flat());
+  const stride=Math.max(1,Math.ceil(count/240));
+  return <g>{values.map((row,i)=><g key={i}>
+    <text x="50" y={28+i*29} textAnchor="end" style={{fill:MODE_COLORS[i]}}>{MODES[i]} Hz</text>
+    {Array.from({length:Math.ceil(count/stride)},(_,j)=>{
+      const start=j*stride,end=Math.min(count,start+stride);
+      const value=row.slice(start,end).reduce((a,b)=>a+b,0)/(end-start);
+      return <rect key={j} x={56+686*start/count} y={10+i*29} width={686*(end-start)/count+.1} height="28"
+        fill={`hsl(202 72% ${96-65*value/max}%)`} onClick={()=>seek(start)}>
+        <title>{`${MODES[i]} Hz · ${fmt((start+1)/rate)} s · ${fmt(value)} a.u.`}</title></rect>;
+    })}
+  </g>)}<text x="56" y="143">{fmt(1/rate)} s</text><text x="400" y="143" textAnchor="middle">0 to {fmt(max)} a.u.</text>
+  <text x="742" y="143" textAnchor="end">{fmt(count/rate)} s</text></g>;
+});
+
+export default function CoveScience({field, count, rate, sample, site, mode, row, rows, geometry: sites, select, setMode, seek}: {
+  geometry:Site[];
   field:Float64Array;count:number;rate:number;sample:number;site:number;mode:number;row:Row;rows:Row[];
   select:(i:number)=>void;setMode:(i:number)=>void;seek:(i:number)=>void;
 }) {
@@ -199,7 +223,7 @@ export default function CoveScience({field, count, rate, sample, site, mode, row
   const [zoom,setZoom]=useState(1);
   const [reference,setReference]=useState(0);
   const [comparison,setComparison]=useState(false);
-  const trajectories=useMemo(()=>MODES.map((_,i)=>modeTrajectory(field,site,i)),[field,site]);
+  const trajectories=useMemo(()=>MODES.map((_,i)=>modeTrajectory(field,site,i,sites.length)),[field,site,sites.length]);
   const modeData=trajectories[mode];
   const span=Math.max(2,Math.ceil(count/zoom));
   const start=Math.max(0,Math.min(count-span,sample-Math.floor(span/2)));
@@ -212,23 +236,23 @@ export default function CoveScience({field, count, rate, sample, site, mode, row
   ],[modeData,mode]);
   const phaseSeries=useMemo(()=>[{name:`${MODES[mode]} Hz relative to ${MODES[reference]} Hz`,color:MODE_COLORS[mode],
     data:modeData.map((p,i)=>phaseDifference(p.phase,trajectories[reference][i].phase))}],[modeData,mode,reference,trajectories]);
+  const modalAmplitude=useMemo(()=>trajectories.map(points=>points.map(v=>v.amplitude)),[trajectories]);
   const matrix=useMemo(()=>spatialMatrix(row.weights),[row]);
-  const lowIndex=fieldIndex(sample,site,0);
+  const lowIndex=fieldIndex(sample,site,0,sites.length);
   const links=MODES.map((_,i)=>MODES.map((__,j)=>i>0&&j===0 ? crossMode([field[lowIndex],field[lowIndex+1]],i).shiftHz:null));
-  const spatial=(m:number)=>sites.map((_,i)=>{const idx=fieldIndex(sample,i,m),real=field[idx],imaginary=field[idx+1];
+  const spatial=(m:number)=>sites.map((_,i)=>{const idx=fieldIndex(sample,i,m,sites.length),real=field[idx],imaginary=field[idx+1];
     return {real,imaginary,...polar(real,imaginary)};
   });
   const peaks=useMemo(()=>MODES.map((_,i)=>{
     let peak=1e-8;
     for(let j=0;j<count;j++) for(let k=0;k<sites.length;k++){
-      const offset=fieldIndex(j,k,i);peak=Math.max(peak,Math.hypot(field[offset],field[offset+1]));
+      const offset=fieldIndex(j,k,i,sites.length);peak=Math.max(peak,Math.hypot(field[offset],field[offset+1]));
     }
     return peak;
-  }),[field,count]);
+  }),[field,count,sites.length]);
   const states=spatial(mode);
   const spectral=useMemo(()=>{
     const signal=modeData.map(v=>v.real);
-    if(count/rate<.5) return null;
     const power=spectrogram(signal,rate);
     const bins=power[0]?.length??0;
     const data=Array.from({length:bins},(_,i)=>10*Math.log10(Math.max(1e-12,power.reduce((sum,col)=>sum+col[i],0)/power.length)));
@@ -259,20 +283,20 @@ export default function CoveScience({field, count, rate, sample, site, mode, row
         rate={rate} domain={domain} cursor={sample} onSeek={seek}/>
     </section>
     <section><h2>Spatial Field</h2>
-      <p>Amplitude is the magnitude of the modeled complex state in arbitrary units. The colored amplitude surface interpolates the samples. Phase is shown only at computed sites, with gray marking undefined phase.</p>
+      <p>Amplitude is the magnitude of the modeled complex state in arbitrary units. Each colored location shows a computed sample. Gray marks undefined phase.</p>
       <label className="science-toggle"><input type="checkbox" checked={comparison} onChange={e=>setComparison(e.target.checked)}/> Compare amplitude across four modes</label>
       <div className="science-columns">
         {(comparison?MODES.map((_,i)=>i):[mode]).map(i=><div key={i}><h3>{MODES[i]} Hz</h3>
-          <SpatialMap states={spatial(i)} site={site} select={j=>{select(j);setMode(i);}} peak={peaks[i]}/></div>)}
-        <div><h3>{MODES[mode]} Hz</h3><SpatialMap states={states} site={site} select={select} peak={peaks[mode]} phase/></div>
+          <SpatialMap geometry={sites} states={spatial(i)} site={site} select={j=>{select(j);setMode(i);}} peak={peaks[i]}/></div>)}
+        <div><h3>{MODES[mode]} Hz</h3><SpatialMap geometry={sites} states={states} site={site} select={select} peak={peaks[mode]} phase/></div>
       </div>
       <figure className="cove-figure scientific-trace evolution-plot"><figcaption>Distributed amplitude through time
         <span>{MODES[mode]} Hz · rows are sites · 0 to {fmt(peaks[mode])} a.u.</span></figcaption>
         <svg viewBox="0 0 752 164" preserveAspectRatio="none" role="img" aria-label="Site by time amplitude heatmap">
-          <EvolutionCells field={field} count={count} mode={mode} rate={rate} peak={peaks[mode]} seek={seek} select={select}/>
-          <rect x="44" y={14+site*4.8} width="694" height="4.8" fill="none" stroke="#d08438" pointerEvents="none"/>
+          <EvolutionCells field={field} count={count} mode={mode} rate={rate} peak={peaks[mode]} seek={seek} select={select} siteCount={sites.length}/>
+          <rect x="44" y={14+site*120/sites.length} width="694" height={120/sites.length} fill="none" stroke="#d08438" pointerEvents="none"/>
           <line className="cove-cursor" x1={44+694*(sample+.5)/count} x2={44+694*(sample+.5)/count} y1="14" y2="134" pointerEvents="none"/>
-          {[0,4,9,14,19,24].map(i=><text key={i} x="39" y={18+i*4.8} textAnchor="end">{i+1}</text>)}
+          {[0,.2,.4,.6,.8,1].map(p=>Math.floor(p*(sites.length-1))).map(i=><text key={i} x="39" y={18+i*120/sites.length} textAnchor="end">{i+1}</text>)}
           <text x="44" y="153">{fmt(1/rate)} s</text><text x="738" y="153" textAnchor="end">{fmt(count/rate)} s</text>
         </svg>
         <p className="hint">Select a cell to move to its site and time. For long clips each cell shows mean amplitude over neighboring samples.</p>
@@ -295,8 +319,15 @@ export default function CoveScience({field, count, rate, sample, site, mode, row
           series={[{name:`${MODES[mode]} Hz mode`,color:MODE_COLORS[mode],data:spectral.data}]}
           rate={spectral.window/rate} offset={0} xUnit="Hz" domain={[0,spectral.data.length-1]}
           range={[Math.min(...spectral.data)-2,Math.max(...spectral.data)+2]}/>
-        <SiteSpectrogram power={spectral.power} rate={rate} windowSize={spectral.window} seek={seek}/>
+        {count/rate>=.5 ? <SiteSpectrogram power={spectral.power} rate={rate} windowSize={spectral.window} seek={seek}/> :
+          <p className="science-note">The still image response spans {fmt(count/rate)} seconds. The spectrum describes that transient with {fmt(rate/spectral.window)} Hz bin spacing. A longer clip is needed for a time frequency sequence.</p>}
       </div> : <p className="science-note">This response spans {fmt(count/rate)} seconds. A spectrum or spectrogram would have limited frequency resolution, so the selected mode is shown as a transient trajectory above. Upload a longer clip for time frequency analysis.</p>}
+      <figure className="cove-figure time-frequency"><figcaption>Mode amplitude versus time<span>Selected site · shared scale</span></figcaption>
+        <svg viewBox="0 0 760 150" preserveAspectRatio="none" role="img" aria-label="Mode amplitude versus time">
+          <ModeHeatmap values={modalAmplitude} count={count} rate={rate} seek={seek}/>
+          <line x1={56+686*(sample+.5)/count} x2={56+686*(sample+.5)/count} y1="10" y2="126" className="cove-cursor" pointerEvents="none"/>
+        </svg>
+      </figure>
       {rows.length>1 && <ScientificPlot title="Visual features over time at selected site" unit="Normalized input features"
         series={temporal} rate={rate*rows.length/count} offset={0} domain={[0,rows.length-1]}
         cursor={Math.floor(sample*rows.length/count)}/>}

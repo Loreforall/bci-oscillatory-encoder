@@ -1,5 +1,6 @@
 """Visual features and stable, computational complex population dynamics."""
 from dataclasses import dataclass
+from functools import lru_cache
 
 import cv2
 import numpy as np
@@ -7,19 +8,27 @@ import numpy as np
 SIZE = 64
 GRID = 5
 FREQUENCIES = np.array([6., 10., 20., 40.])
-axis = np.linspace(-1, 1, GRID)
-yy, xx = np.meshgrid(axis, axis, indexing="ij")
-radius = np.hypot(xx, yy)
-eccentricity = np.expm1(np.log(3) * radius / np.sqrt(2)) / 2
-scale = np.divide(eccentricity, radius, out=np.zeros_like(radius), where=radius > 0)
-POSITIONS = np.stack([yy * scale, xx * scale], axis=-1).reshape(-1, 2)
-DISTANCE = np.abs(POSITIONS[:, None] - POSITIONS[None]).sum(axis=-1)
-indices = np.indices((GRID, GRID)).reshape(2, -1).T
+@lru_cache
+def field_geometry(side=GRID):
+    if side not in (5, 10, 16, 32):
+        raise ValueError("Unsupported COVE grid size")
+    axis = np.linspace(-1, 1, side)
+    yy, xx = np.meshgrid(axis, axis, indexing="ij")
+    radius = np.hypot(xx, yy)
+    eccentricity = np.expm1(np.log(3) * radius / np.sqrt(2)) / 2
+    scale = np.divide(eccentricity, radius, out=np.zeros_like(radius), where=radius > 0)
+    positions = np.stack([yy * scale, xx * scale], axis=-1).reshape(-1, 2)
+    distance = np.abs(positions[:, None] - positions[None]).sum(axis=-1)
+    indices = np.indices((side, side)).reshape(2, -1).T
+    local = np.abs(indices[:, None] - indices[None]).sum(axis=-1) <= 1
+    return positions, distance, local, eccentricity
+
+
+POSITIONS, DISTANCE, LOCAL, eccentricity = field_geometry()
 HAAR_SCALES = (1, 2, 4)
 FREQUENCY_EDGES = (.0625, .125, .25)
 FFT_RADIUS = np.hypot(*np.meshgrid(np.fft.fftfreq(SIZE), np.fft.fftfreq(SIZE)))
 FFT_BAND = np.digitize(FFT_RADIUS, FREQUENCY_EDGES)
-LOCAL = np.abs(indices[:, None] - indices[None]).sum(axis=-1) <= 1
 
 
 def kernel(angle, frequency, phase):
@@ -44,14 +53,15 @@ class Visual:
     detail: np.ndarray | None = None
 
 
-def extract(frames, fps=24):
+def extract(frames, fps=24, *, side=GRID):
     """Accept one sequence of grayscale or RGB uint8 frames."""
     frames = np.asarray(frames)
     if (frames.ndim not in (3, 4) or not frames.size or frames.dtype != np.uint8
             or (frames.ndim == 4 and frames.shape[-1] != 3)
             or not np.isfinite(fps) or fps <= 0):
         raise ValueError("Expected nonempty uint8 grayscale/RGB sequence and positive FPS")
-    coords = ((POSITIONS + 1) * (SIZE - 1) / 2).astype(np.float32)
+    positions, _, _, eccentricity = field_geometry(side)
+    coords = ((positions + 1) * (SIZE - 1) / 2).astype(np.float32)
     mx, my = coords[:, 1, None], coords[:, 0, None]
 
     def sample(image):
@@ -119,8 +129,9 @@ def advanced_drive(visual):
 
 def coupling(contrast, parameters):
     difference = abs(contrast[..., :, None] - contrast[..., None, :])
-    logits = -parameters[0] * DISTANCE - parameters[1] * difference
-    weights = np.exp(logits) * LOCAL
+    _, distance, local, _ = field_geometry(int(np.sqrt(contrast.shape[-1])))
+    logits = -parameters[0] * distance - parameters[1] * difference
+    weights = np.exp(logits) * local
     return weights / weights.sum(axis=-1, keepdims=True)
 
 
@@ -153,7 +164,7 @@ def encode(visual, parameters=(2., 0.), fps=24, *, phase=True, spatial=True, cro
     rotation = np.exp(2j * np.pi * FREQUENCIES * dt)
     retention = np.exp(-dt / .09)
     weights = coupling(visual.contrast, parameters) if spatial else np.broadcast_to(
-        np.eye(len(LOCAL)), (len(source), *LOCAL.shape))
+        np.eye(source.shape[1]), (len(source), source.shape[1], source.shape[1]))
     state = np.zeros_like(source[0], dtype=complex) if initial is None else np.asarray(initial, complex).copy()
     if state.shape != source[0].shape or not np.isfinite(state).all() or np.any(abs(state) > 1):
         raise ValueError("Initial state must have the per-mode shape and lie in the unit disk")

@@ -111,3 +111,16 @@ def test_exported_kernel_model_reproduces_held_out_scores():
         kernel += weight * np.exp(-distance / model["width"])
     np.testing.assert_allclose(kernel @ model["dual"] + model["offset"], selected["prediction"])
     assert len(ratings[ratings["selected_calibration"]]["rmse_by_onset_bin"]) == 30
+
+
+def test_expanded_field_is_bounded_and_keeps_local_stochastic_weights():
+    frame = np.random.default_rng(9).integers(0, 256, (4, 64, 64), np.uint8)
+    for side in (10, 16):
+        visual = extract(frame, side=side)
+        weights = coupling(visual.contrast, (2, 2))
+        assert weights.shape == (4, side**2, side**2)
+        np.testing.assert_allclose(weights.sum(-1), 1)
+        assert np.max(np.count_nonzero(weights, axis=-1)) == 5
+        z = encode(visual, (2, 2), advanced=True)
+        assert z.shape == (4, side**2, 4)
+        assert np.isfinite(z).all() and np.max(np.abs(z)) <= 1

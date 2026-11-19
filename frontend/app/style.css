@@ -216,3 +216,17 @@ dialog h2 { position: sticky; top: 0; }
 .evolution-plot { margin-top:10px; }
 .evolution-plot .hint { padding:0 8px; }
 .evolution-plot rect[fill]:not([fill=none]) { cursor:pointer; }
+
+.signal-instrument { margin:20px 0 24px; background:#e9f3fa; border:1px solid #9bbacf; padding:10px; }
+.instrument-heading { display:flex; justify-content:space-between; align-items:start; gap:8px; flex-wrap:wrap; }
+.instrument-heading h2 { position:static; background:none; border:0; padding:0; font:bold 21px Arial,sans-serif; text-transform:none; }
+.instrument-heading p,.signal-instrument > p { margin:5px 0; color:var(--muted); }
+.rack-figure svg { min-height:280px; touch-action:pan-y; }
+.rack-readout { padding:4px 7px; margin:0; font:11px var(--mono); background:#e9f2f8; }
+.aligned-field .spatial-square { max-width:360px; margin:auto; }
+.aligned-field .spatial-square svg { height:100%; }
+.signed-scale i { background:linear-gradient(90deg,#9c4f25,#ecf5fb,#1e648f); }
+.feature-atlas .science-columns { gap:8px; }
+@media(max-width:640px) { .rack-figure { overflow-x:auto; } .rack-figure svg { min-width:620px; } }
+.cove-hero-output .hero-science-wave:not(.expanded) .scientific-trace svg { height:168px; }
+.cove-hero-output .aligned-field .spatial-square { max-width:210px; }

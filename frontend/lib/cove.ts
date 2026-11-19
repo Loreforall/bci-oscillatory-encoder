@@ -4,23 +4,24 @@ export const GRID = 5;
 export const HAAR_SCALES = [1, 2, 4];
 export const FOURIER_EDGES = [.0625, .125, .25];
 export const MODES = [6, 10, 20, 40];
-const axis = Array.from({length: GRID}, (_, i) => 2 * i / (GRID - 1) - 1);
-export const sites = axis.flatMap(y => axis.map(x => {
-  const radius = Math.hypot(y, x);
-  const eccentricity = Math.expm1(Math.log(3) * radius / Math.SQRT2) / 2;
-  const scale = radius ? eccentricity / radius : 0;
-  return { x: (x * scale + 1) * (SIZE - 1) / 2,
-    y: (y * scale + 1) * (SIZE - 1) / 2, eccentricity };
-}));
-const neighbors = sites.map((site, i) => sites.flatMap((other, j) =>
-  Math.abs(i % GRID - j % GRID) + Math.abs(Math.floor(i / GRID) - Math.floor(j / GRID)) <= 1
-    ? [{j, distance: (Math.abs(site.x - other.x) + Math.abs(site.y - other.y)) * 2 / (SIZE - 1)}] : []));
+export function makeSites(side: number) {
+  const axis = Array.from({length:side}, (_,i)=>2*i/(side-1)-1);
+  return axis.flatMap(y=>axis.map(x=>{
+    const radius=Math.hypot(y,x);
+    const eccentricity=Math.expm1(Math.log(3)*radius/Math.SQRT2)/2;
+    const scale=radius ? eccentricity/radius : 0;
+    return {x:(x*scale+1)*(SIZE-1)/2,y:(y*scale+1)*(SIZE-1)/2,eccentricity};
+  }));
+}
+
+export const sites = makeSites(GRID);
+export type Site = typeof sites[number];
 
 function edge(x: number) {
   return x < 0 ? -x : x >= SIZE ? 2 * SIZE - x - 2 : x;
 }
 
-function gray(rgb: Uint8Array) {
+export function gray(rgb: Uint8Array) {
   const data = new Float64Array(SIZE * SIZE);
   for (let i = 0; i < data.length; i++) {
     data[i] = ((9798*rgb[3*i] + 19235*rgb[3*i+1] + 3735*rgb[3*i+2] + 16384) >> 15) / 255;
@@ -78,25 +79,46 @@ function corners(site: typeof sites[number]) {
   return [{x: x0, y: y0, weight: (1-dx)*(1-dy)}, {x: x0+1, y: y0, weight: dx*(1-dy)},
     {x: x0, y: y0+1, weight: (1-dx)*dy}, {x: x0+1, y: y0+1, weight: dx*dy}].filter(c => c.weight);
 }
-const interpolation = sites.map(corners);
-export const samplingTaps = (site: number) => interpolation[site];
+function makeGeometry(side: number) {
+  const sites = makeSites(side);
+  const interpolation = sites.map(corners);
+  const taps = interpolation.map(patch => patch.map(corner => ({
+    weight: corner.weight,
+    indices: Array.from({length:225},(_,i)=>edge(corner.y+Math.floor(i/15)-7)*SIZE+edge(corner.x+i%15-7)),
+  })));
+  const neighbors = sites.map((site,i)=>{
+    const x=i%side, y=Math.floor(i/side);
+    const candidates = [y>0?i-side:-1,x>0?i-1:-1,i,x<side-1?i+1:-1,y<side-1?i+side:-1];
+    return candidates.filter(j=>j>=0).map(j=>({
+      j,distance:(Math.abs(site.x-sites[j].x)+Math.abs(site.y-sites[j].y))*2/(SIZE-1),
+    }));
+  });
+  return {sites,interpolation,taps,neighbors};
+}
 
-const taps = interpolation.map(patch => patch.map(corner => ({
-  weight: corner.weight,
-  indices: Array.from({length: 225}, (_, i) => edge(corner.y + Math.floor(i / 15) - 7) * SIZE
-                                            + edge(corner.x + i % 15 - 7)),
-})));
+const geometries = new Map<number,ReturnType<typeof makeGeometry>>();
+function geometry(side:number) {
+  let result=geometries.get(side);
+  if (!result) {
+    if (![5,10,16,32].includes(side)) throw new RangeError('Unsupported COVE grid size');
+    result=makeGeometry(side);
+    geometries.set(side,result);
+  }
+  return result;
+}
 
-function sample(image: Float64Array, site: number) {
-  return interpolation[site].reduce((sum, c) => sum + c.weight * image[c.y * SIZE + c.x], 0);
+export const samplingTaps = (site: number, side=GRID) => geometry(side).interpolation[site];
+
+function sample(image:Float64Array, taps:ReturnType<typeof corners>) {
+  return taps.reduce((sum,c)=>sum+c.weight*image[c.y*SIZE+c.x],0);
 }
 
 type Complex = [number, number];
 
-function response(image: Float64Array, site: number, filter: number): Complex {
+function response(image: Float64Array, taps: ReturnType<typeof makeGeometry>["taps"][number], filter: number): Complex {
   let real = 0, imag = 0;
   const [re, im] = kernels[filter];
-  for (const patch of taps[site]) {
+  for (const patch of taps) {
     let pr = 0, pi = 0;
     for (let k = 0; k < re.length; k++) {
       const pixel = image[patch.indices[k]];
@@ -142,7 +164,8 @@ export function crossMode(low: Complex, mode: number, amplitudeCoupling = true) 
     driveGain: amplitudeCoupling && mode > 0 ? 1 - .09*(1-low[0]) : 1};
 }
 
-export function analyzeCove(frames: Uint8Array[], fps: number, slopes = [2, 0], advanced = false) {
+export function analyzeCove(frames: Uint8Array[], fps: number, slopes = [2, 0], advanced = false, side = GRID) {
+  const {sites, interpolation, taps, neighbors} = geometry(side);
   if (frames.length === 1) fps = 24;
   const substeps = Math.ceil(100 / fps);
   const dt = 1 / (fps * substeps);
@@ -161,9 +184,9 @@ export function analyzeCove(frames: Uint8Array[], fps: number, slopes = [2, 0], 
     const square = blur(image.map(p => p*p), blurHigh);
     const variance = square.map((value, i) => value - smoothed[i]**2);
     const highpass = image.map((value, i) => value - smoothed[i]);
-    const brightness = sites.map((_, i) => sample(luminance, i));
-    const contrast = sites.map((_, i) => Math.sqrt(Math.max(0, sample(variance, i))));
-    const low = sites.map((site, i) => MODES.map((_, m) => response(image, i, m)
+    const brightness = sites.map((_, i) => sample(luminance, interpolation[i]));
+    const contrast = sites.map((_, i) => Math.sqrt(Math.max(0, sample(variance, interpolation[i]))));
+    const low = sites.map((site, i) => MODES.map((_, m) => response(image, taps[i], m)
       .map(v => v / ((.15 + contrast[i]) * (1 + site.eccentricity**2))) as Complex));
     history.push(brightness);
     const index = history.length - 1;
@@ -174,7 +197,7 @@ export function analyzeCove(frames: Uint8Array[], fps: number, slopes = [2, 0], 
       }
       return difference / (Math.SQRT2 * size);
     }));
-    const high = sites.map((site, i) => MODES.map((_, m) => response(highpass, i, m + 4)
+    const high = sites.map((site, i) => MODES.map((_, m) => response(highpass, taps[i], m + 4)
       .map(v => v / ((.15 + contrast[i]) * (1 + 5*site.eccentricity**2))) as Complex));
     const motion = brightness.map((value, i) => previous ? Math.tanh((value - previous.brightness[i]) * fps / 12) : 0);
     const phaseChange = low.map((modes, i) => modes.map(([lr, li], m) => {
@@ -231,7 +254,7 @@ export function analyzeCove(frames: Uint8Array[], fps: number, slopes = [2, 0], 
     const detail = sites.flatMap((_, i) => low[i].flatMap(([re, im], m) => [re, im, ...high[i][m]]));
     return {brightness, contrast, drive, weights, state, spectrum, pixels, conventional, detail, wavelets, motion};
   });
-  return {rows, internal, internalRate: fps * substeps, stepsPerFrame, modelFrameRate: fps, field};
+  return {rows, internal, internalRate: fps * substeps, stepsPerFrame, modelFrameRate: fps, field, sites, side};
 }
 
 export function spectrumWindowLength(length: number, hz: number) {
