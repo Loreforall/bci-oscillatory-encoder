@@ -57,7 +57,7 @@ export default function Home() {
     {view === 'advanced' ? <Workbench initialMedia={media}/> : <main className="demo-home">
       <div className="demo-intro">
         <div><p className="research-label">COVE RESEARCH WORKBENCH</p><h1>Visual input to oscillatory field</h1>
-          <p>Inspect the photograph, its computed visual field and the responses of four oscillatory modes.</p></div>
+          <p>Explore how the photograph drives a simulated cortical response, and compare it with the original COVE encoding.</p></div>
         <div className="intro-links"><a href="#try-input">Try your own input ↓</a><a href="#research">Read the research ↓</a></div>
       </div>
       <CovePanel key={revision} frames={media.frames} frame={frame} onFrameChange={setFrame}

@@ -250,3 +250,13 @@ dialog h2 { position: sticky; top: 0; }
 .signal-instrument .rack-figure figcaption span { color:#b9d0e3; }
 .signal-instrument .science-controls select { background:#f3f8fc; color:#173047; }
 .signal-instrument .rack-figure svg .rack-scale-text { fill:#c5dbef; }
+
+:root { --sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+body { font-family:var(--sans); }
+h2,h3,legend,.demo-nav > span,.demo-nav small,.demo-intro .research-label,
+.landing-spatial h2,.demo-upload-section h2,.public-science-title,.research-overview h2,
+.research-overview h3,.science-stack h2,.instrument-heading h2,
+.signal-instrument .instrument-heading p { font-family:var(--sans); }
+h2,h3,legend { text-transform:none; }
+.pathway-select { align-self:center; font-size:11px; }
+.pathway-select select { display:block; color:#173047; background:#f3f8fc; }

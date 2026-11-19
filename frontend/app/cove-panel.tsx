@@ -7,8 +7,10 @@ import { imageError, refineCode } from '../lib/cove-reconstruction';
 import { fieldCsv, fieldJson } from '../lib/cove-export';
 import type { Input, Result } from '../lib/encoder';
 import { playbackFrame, playbackSample } from '../lib/cove-playback';
+import { corticalResponse, CORTICAL_BANDS, CORTICAL_SUBSTEPS } from '../lib/cortical';
 import { AlignedMap, FeatureAtlas, SignalRack } from './cove-instrument';
 import CoveScience, { SiteOverlay } from './cove-science';
+import MeasuredErp from './measured-erp';
 import FramePreview from './frame-preview';
 import renderer from '../lib/cove-decoder.json';
 
@@ -91,6 +93,7 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
   home?: {label: string; example: boolean; upload: ReactNode}; startAdvanced?: boolean;
 }) {
   const [view, setView] = useState<'demo' | 'analysis'>(startAdvanced ? 'analysis' : 'demo');
+  const [pathway,setPathway]=useState<'cortical'|'encoded'>('cortical');
   const [expanded, setExpanded] = useState(false);
   const [overlay, setOverlay] = useState(true);
   const [resetVersion, setResetVersion] = useState(0);
@@ -115,6 +118,9 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
   const slopes = activeModel?.coupling ?? DEFAULT_SLOPES;
   const analysis = useMemo(() => analyzeCove(frames, source.fps, slopes, true, side), [frames, source.fps, slopes, side]);
   const {rows, internal, internalRate, stepsPerFrame, field, sites} = analysis;
+  const cortical=Boolean(home)&&pathway==='cortical';
+  const response=useMemo(()=>cortical?corticalResponse(rows,internalRate,stepsPerFrame):undefined,
+    [cortical,rows,internalRate,stepsPerFrame]);
   const cursorMatchesFrame = playbackFrame(cursor, stepsPerFrame) === frame;
   const sample = cursorMatchesFrame ? cursor : frame * stepsPerFrame;
 
@@ -158,6 +164,17 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
     return [field![offset], field![offset+1]];
   };
   const row = rows[frame];
+  const rackProps={
+    field:response?.field??field!,sites,site,mode,cortical,
+    cursor:cortical?(sample+1)*CORTICAL_SUBSTEPS-1:sample,
+    rate:response?.rate??internalRate,count:response?.count??internal.length,
+    seek:(value:number)=>seek(cortical?Math.floor(value/CORTICAL_SUBSTEPS):value),
+    select:setSite,setMode,
+  };
+  const responseMagnitude=response && sites.map((_,i)=>{
+    const offset=(rackProps.cursor*sites.length*MODES.length+i*MODES.length+mode)*2;
+    return Math.hypot(response.field[offset],response.field[offset+1]);
+  });
   const windowStart = Math.floor(frame / 8) * 8;
   const referenceRows = useMemo(() => side === GRID ? rows :
     analyzeCove(frames, source.fps, slopes, true).rows, [frames,source.fps,slopes,side,rows]);
@@ -256,22 +273,27 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
           <span>Site {site+1} · x {metric(sites[site].x)}, y {metric(sites[site].y)} px on the 64 × 64 input</span>
         </div>
         <p className="hint">Highlighted pixels are the bilinear sampling taps for the selected location. Local image filters also use surrounding pixels. The markers indicate sampling locations.</p>
-        <AlignedMap title={`${MODES[mode]} Hz whole scene amplitude`} unit="a.u." sites={sites} values={magnitude} site={site} select={setSite}/>
+        <AlignedMap title={cortical?`${CORTICAL_BANDS[mode]} Hz nominal · E–I magnitude`:`${MODES[mode]} Hz whole scene amplitude`} unit="a.u." sites={sites} values={responseMagnitude??magnitude} site={site} select={setSite}/>
         <dl className="hero-site-readout">
           <dt>Local luminance</dt><dd>{metric(row.brightness[site])}</dd>
           <dt>Local contrast</dt><dd>{metric(row.contrast[site])}</dd>
           <dt>Signed motion proxy</dt><dd>{metric(row.motion[site])}</dd>
           <dt>Selected mode input magnitude</dt><dd>{metric(Math.hypot(...row.drive[site][mode]))}</dd>
-          <dt>{MODES[mode]} Hz amplitude</dt><dd>{metric(magnitude[site])} a.u.</dd>
-          <dt>{MODES[mode]} Hz phase</dt><dd>{phase[site]===null?'undefined':`${metric(phase[site]!)} rad`}</dd>
+          <dt>COVE {MODES[mode]} Hz amplitude</dt><dd>{metric(magnitude[site])} a.u.</dd>
+          <dt>COVE {MODES[mode]} Hz phase</dt><dd>{phase[site]===null?'undefined':`${metric(phase[site]!)} rad`}</dd>
+          {cortical&&<><dt>Modeled population magnitude</dt><dd>{metric(responseMagnitude![site])} a.u.</dd></>}
         </dl>
         <p className="demo-caption">{sites.length} independently computed sites. The higher resolution fields are computational extensions. Reported EEG results use the verified reference field.</p>
       </div>
-      <SignalRack key={`primary-${resetVersion}`} field={field!} sites={sites} site={site} mode={mode} cursor={sample}
-        rate={internalRate} count={internal.length} seek={seek} select={setSite} setMode={setMode} onExpand={()=>{
+      <SignalRack key={`primary-${resetVersion}`} {...rackProps} onExpand={()=>{
           setExpanded(true);
           requestAnimationFrame(()=>document.getElementById('expanded-waveforms')?.scrollIntoView({block:'start'}));
-        }}/>
+        }}>
+        <label className="pathway-select">Signal pathway <select value={pathway} onChange={event=>setPathway(event.target.value as typeof pathway)}>
+          <option value="cortical">Modeled cortical response</option>
+          <option value="encoded">COVE encoded states</option>
+        </select></label>
+      </SignalRack>
     </div>}
     <div className="cove-transport" aria-label="COVE playback controls">
       <button onClick={() => {
@@ -285,7 +307,7 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
       }}>{playing ? 'Pause' : 'Play'}</button>
       <button onClick={() => seek(0)}>Reset playback</button>
       {home && <button onClick={() => {
-        seek(0); setSite(Math.floor((side-1)/2)*(side+1)); setMode(0); setScale(0); setExpanded(false); setOverlay(true);
+        seek(0); setSite(Math.floor((side-1)/2)*(side+1)); setMode(0); setScale(0); setPathway('cortical'); setExpanded(false); setOverlay(true);
         setResetVersion(value=>value+1);
       }}>Reset View</button>}
       <label>Playback timeline <input type="range" min="0" max={internal.length-1} value={sample}
@@ -314,8 +336,8 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
       <label>Site <select value={site} onChange={event => setSite(Number(event.target.value))}>
         {sites.map((_, index) => <option key={index} value={index}>{index+1}</option>)}
       </select></label>
-      <label>Mode <select value={mode} onChange={event => setMode(Number(event.target.value))}>
-        {MODES.map((hz, index) => <option key={hz} value={index}>{hz} Hz</option>)}
+      <label>{cortical?'Nominal resonance':'Mode'} <select value={mode} onChange={event => setMode(Number(event.target.value))}>
+        {(cortical?CORTICAL_BANDS:MODES).map((hz, index) => <option key={hz} value={index}>{hz} Hz</option>)}
       </select></label>
       {(home || view === 'analysis') && <label>Haar scale <select value={scale} onChange={event => setScale(Number(event.target.value))}>
         {HAAR_SCALES.map((size, index) => <option key={size} value={index}>{size}+{size} frames</option>)}
@@ -344,13 +366,13 @@ export default function CovePanel({frames, frame, source, onFrameChange, home, s
     {error && <p className="error" role="alert">{error}</p>}
     {home && <>
       {expanded && <div id="expanded-waveforms">
-        <SignalRack key={`rack-${resetVersion}`} field={field!} sites={sites} site={site} mode={mode} cursor={sample}
-          rate={internalRate} count={internal.length} seek={seek} select={setSite} setMode={setMode} expanded onExpand={()=>{
+        <SignalRack key={`rack-${resetVersion}`} {...rackProps} expanded onExpand={()=>{
             setExpanded(false);
             document.querySelector<HTMLButtonElement>('.rack-primary button')?.focus();
           }}/>
       </div>}
       {home.upload}
+      <MeasuredErp/>
       <FeatureAtlas key={`atlas-${resetVersion}`} rgb={frames[frame]} sites={sites} site={site} select={setSite}
         brightness={row.brightness} contrast={row.contrast} detail={row.detail}/>
       <CoveScience key={resetVersion} field={field!} count={internal.length} rate={internalRate} sample={sample}

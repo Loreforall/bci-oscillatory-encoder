@@ -4,6 +4,7 @@ import { memo, useMemo, useState } from 'react';
 import { MODES, FOURIER_EDGES, gray, type Site } from '../lib/cove';
 import { SIZE, spatialBand } from '../lib/features';
 import { rackSites, rackState } from '../lib/cove-visualization';
+import { CORTICAL_BANDS } from '../lib/cortical';
 import { SiteOverlay } from './cove-science';
 
 const fmt=(n:number)=>Number(n.toPrecision(4)).toString();
@@ -11,11 +12,12 @@ const fmt=(n:number)=>Number(n.toPrecision(4)).toString();
 const rackColors = ['#67ddff','#a9eb72','#ffc170','#fb90d6','#9eaaff','#55efbd','#ff947e','#f7df72',
   '#7dbfff','#d5a5ff','#76ebdd','#ffa799','#b4df8a','#f7a7ea','#82c9ff','#ffe591'];
 
-export const SignalRack = memo(function SignalRack({field,sites,site,mode,cursor,rate,seek,select,setMode,count,expanded=false,onExpand}:{
+export const SignalRack = memo(function SignalRack({field,sites,site,mode,cursor,rate,seek,select,setMode,count,expanded=false,onExpand,cortical=false,children}:{
   field:Float64Array;sites:Site[];site:number;mode:number;cursor:number;rate:number;count:number;
   seek:(sample:number)=>void;select:(site:number)=>void;setMode:(mode:number)=>void;
-  expanded?:boolean;onExpand?:()=>void;
+  expanded?:boolean;onExpand?:()=>void;cortical?:boolean;children?:React.ReactNode;
 }) {
+  const bands=cortical?CORTICAL_BANDS:MODES;
   const [zoom,setZoom]=useState(1);
   const [quantity,setQuantity]=useState<'real'|'imaginary'|'amplitude'|'phase'>('real');
   const [hover,setHover]=useState<{row:number;sample:number}>();
@@ -29,13 +31,15 @@ export const SignalRack = memo(function SignalRack({field,sites,site,mode,cursor
   const right=width-22;
   const x=(i:number)=>left+(i-from)/span*(right-left);
   const read=(r:{site:number;mode:number}, time:number)=>{
-    const {re,im}=rackState(field,sites.length,r.site,r.mode,rate,time);
+    const index=(Math.round(time)*sites.length*MODES.length+r.site*MODES.length+r.mode)*2;
+    const {re,im}=cortical?{re:time<0?0:field[index],im:time<0?0:field[index+1]}:
+      rackState(field,sites.length,r.site,r.mode,rate,time);
     const amplitude=Math.hypot(re,im);
     return quantity==='real'?re:quantity==='imaginary'?im:quantity==='amplitude'?amplitude:
       amplitude>1e-9?Math.atan2(im,re):null;
   };
   const paths=useMemo(()=>channels.map((r,i)=>{
-    const subdivisions=8;
+    const subdivisions=cortical?1:8;
     const values=Array.from({length:span*subdivisions+1},(_,k)=>read(r,from+k/subdivisions));
     let min=Infinity,max=-Infinity;
     for(const v of values) if(v!==null){min=Math.min(min,v);max=Math.max(max,v);}
@@ -52,7 +56,7 @@ export const SignalRack = memo(function SignalRack({field,sites,site,mode,cursor
     return {d,min,max};
   // The horizontal transform and state accessor depend on these inputs.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }),[channels,field,sites.length,rate,quantity,from,span,dy,left,right]);
+  }),[channels,field,sites.length,rate,quantity,from,span,dy,left,right,cortical]);
   const point=(event:React.PointerEvent<SVGSVGElement>|React.MouseEvent<SVGSVGElement>)=>{
     const rect=event.currentTarget.getBoundingClientRect();
     const col=Math.round(from+((event.clientX-rect.left)/rect.width*width-left)/(right-left)*span);
@@ -65,26 +69,27 @@ export const SignalRack = memo(function SignalRack({field,sites,site,mode,cursor
   return <section className={`signal-instrument ${expanded?'rack-expanded':'rack-primary'}`} aria-label={expanded?'Expanded COVE waveform rack':'COVE waveform rack'}>
     <div className="instrument-heading"><div><h2>{expanded?'Expanded waveform rack':'COVE waveform rack'}</h2>
       <p>{channels.length} traces · {channels.length/MODES.length} sites · {fmt(rate)} integrated samples/s</p></div>
+      {children}
       {onExpand&&<button type="button" aria-expanded={expanded} onClick={onExpand}>{expanded?'Close expanded view':'Expand to 64 traces'}</button>}
       {expanded&&<div className="science-controls">
         <label>Signal quantity<select value={quantity} onChange={e=>setQuantity(e.target.value as typeof quantity)}>
-          <option value="real">Real component</option><option value="imaginary">Imaginary component</option>
-          <option value="amplitude">Magnitude envelope</option><option value="phase">Wrapped phase</option>
+          <option value="real">{cortical?'Excitatory deviation':'Real component'}</option><option value="imaginary">{cortical?'Inhibitory deviation':'Imaginary component'}</option>
+          <option value="amplitude">{cortical?'Population-plane magnitude':'Magnitude envelope'}</option><option value="phase">{cortical?'Population-plane angle':'Wrapped phase'}</option>
         </select></label>
         <label>Time zoom · {zoom}×<input type="range" min="1" max="16" value={zoom} onChange={e=>setZoom(e.target.valueAsNumber)}/></label>
       </div>}
     </div>
-    <figure className="cove-figure rack-figure"><figcaption>{quantity==='real'?'Real component of rotating COVE states':quantity==='imaginary'?'Imaginary component':quantity==='amplitude'?'Magnitude envelope':'Wrapped phase'}
+    <figure className="cove-figure rack-figure"><figcaption>{cortical ? ({real:'Excitatory population deviation · simulated',imaginary:'Inhibitory population deviation',amplitude:'Population-plane magnitude',phase:'Population-plane angle'}[quantity]) : ({real:'Real component of rotating COVE states',imaginary:'Imaginary component',amplitude:'Magnitude envelope',phase:'Wrapped phase'}[quantity])}
       <span>Independent row scales · {unit}</span></figcaption>
       <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{height}} role="img" aria-label={`${channels.length} stacked COVE signal traces`}
         onPointerMove={e=>setHover(point(e))} onPointerLeave={()=>setHover(undefined)} onClick={e=>{
           const p=point(e);select(channels[p.row].site);setMode(channels[p.row].mode);seek(Math.max(0,p.sample));
         }}>
         {channels.map((r,i)=><g key={`${r.site}:${r.mode}`}>
-          <rect x="0" y={top+i*dy} width={width} height={dy} fill={r.site===site&&r.mode===mode?'#263f57':Math.floor(i/4)%2?'#14263b':'#102034'}/>
+          <rect x="0" y={top+i*dy} width={width} height={dy} fill={r.site===site?(r.mode===mode?'#354f67':'#20394f'):Math.floor(i/4)%2?'#14263b':'#102034'}/>
           {i%4===0&&<path d={`M0 ${top+i*dy}H${right}`} stroke="#354b62"/>}
           <path d={`M${left} ${top+(i+.5)*dy}H${right}`} stroke="#2b4058" strokeDasharray="2 4"/>
-          <text x="8" y={top+i*dy+dy/2+3} style={{fill:r.color}}>S{r.site+1} · {MODES[r.mode]} Hz</text>
+          <text x="8" y={top+i*dy+dy/2+3} style={{fill:r.color}}>S{r.site+1} · {bands[r.mode]} Hz</text>
           {expanded&&<text x="78" y={top+i*dy+dy/2+3} className="rack-scale-text">{fmt(paths[i].min)}…{fmt(paths[i].max)}</text>}
         </g>)}
         {[0,1,2,3,4].map(j=>{
@@ -93,14 +98,15 @@ export const SignalRack = memo(function SignalRack({field,sites,site,mode,cursor
             <text x={x(t)} y={height-9} className="rack-scale-text" textAnchor={j===4?'end':'middle'}>{fmt((t+1)/rate*1000)} ms</text></g>;
         })}
         {channels.map((r,i)=><path key={`${r.site}:${r.mode}`} d={paths[i].d} className="trace" style={{color:r.color}}/>)}
+        {from===-1&&<line x1={x(-1)} x2={x(-1)} y1={top} y2={height-27} stroke="#b1def6" strokeWidth="2"/>}
         <line x1={x(cursor)} x2={x(cursor)} y1={top} y2={height-27} stroke="#fff0aa" opacity=".85"/>
         {hover&&<line x1={x(hover.sample)} x2={x(hover.sample)} y1={top} y2={height-27} stroke="#e4f4ff" strokeDasharray="3 3"/>}
       </svg>
       <p className="rack-readout">{active&&hover ?
-        `Site ${active.site+1} · ${MODES[active.mode]} Hz · ${fmt((hover.sample+1)/rate*1000)} ms · ${v===null?'undefined':fmt(v)} ${unit}` :
-        'Hover for exact samples. Click any row to select its site, mode and time.'}</p>
+        `Site ${active.site+1} · ${bands[active.mode]} Hz · ${fmt((hover.sample+1)/rate*1000)} ms · ${v===null?'undefined':fmt(v)} ${unit}` :
+        '0 ms marks stimulus onset. Hover for exact samples. Click a row to select its site, channel and time.'}</p>
     </figure>
-    {expanded&&<p>Substep curves interpolate the rotating complex state between integrated samples. Each row is centered and scaled to its displayed range. Hover values retain the original units.</p>}
+    {expanded&&<p>{cortical ? 'The frequency labels are nominal resonance settings. Angle describes the E–I state plane. Each row uses its own vertical scale.' : 'Substep curves interpolate the rotating complex state between integrated samples. Each row is centered and scaled to its displayed range. Hover values retain the original units.'}</p>}
   </section>;
 });
 

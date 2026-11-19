@@ -208,3 +208,35 @@ test('substep display follows damped rotation and preserves a zero input', async
   close([midpoint.re,midpoint.im], [Math.cos(theta/2),Math.sin(theta/2)].map(v=>v*Math.exp(-.5/(.09*rate))), 1e-12);
   assert.deepEqual(rackState(new Float64Array(16),1,0,3,rate,.5), {re:0,im:0});
 });
+
+test('deterministic cortical populations respond to onset, contrast, orientation, video and spatial coupling', async () => {
+  const {corticalResponse,CORTICAL_SUBSTEPS}=await import('../lib/cortical.ts');
+  const image=analyzeCove([frames[0]],24,[2,2],true,16);
+  const other=analyzeCove([frames[2]],24,[2,2],true,16);
+  const {rows,internalRate,stepsPerFrame}=image;
+  const run=(input=rows,options={})=>corticalResponse(input,internalRate,stepsPerFrame,{duration:.6,...options});
+  const result=run();
+  const width=16**2*8;
+  assert.equal(result.rate,internalRate*CORTICAL_SUBSTEPS);
+  assert.equal(result.field.length,result.count*width);
+  assert.ok(result.field.subarray(0,result.latencySamples*width).every(v=>v===0));
+  assert.ok(result.field.subarray(result.latencySamples*width).some(v=>Math.abs(v)>1e-4));
+  assert.ok(result.field.every(v=>Number.isFinite(v)&&Math.abs(v)<15));
+  assert.deepEqual(result.field,run().field);
+  assert.notDeepEqual(result.field,run(other.rows).field);
+  assert.notDeepEqual(result.field,run(rows,{lateral:false}).field);
+  const changed=run([...rows,...other.rows]);
+  const transition=(stepsPerFrame*CORTICAL_SUBSTEPS+result.latencySamples)*width;
+  assert.deepEqual(result.field.subarray(0,transition),changed.field.subarray(0,transition));
+  assert.notDeepEqual(result.field.subarray(transition),changed.field.subarray(transition));
+  const blank=analyzeCove([new Uint8Array(frames[0].length)],24,[2,2],true,16);
+  assert.ok(run(blank.rows).field.every(v=>v===0));
+  const release=run(rows,{stimulusDuration:.1}).field;
+  const rms=segment=>Math.sqrt(segment.reduce((sum,v)=>sum+v*v,0)/segment.length);
+  assert.ok(rms(release.subarray(-width*20))<rms(release.subarray(width*20,width*40))*.15);
+  const m=4*(16*6+6);
+  const edge=rows[0].detail[m*4];
+  const altered={...rows[0],detail:rows[0].detail.slice()};
+  altered.detail[m*4]=edge+1;
+  assert.notDeepEqual(result.field,run([altered]).field);
+});
