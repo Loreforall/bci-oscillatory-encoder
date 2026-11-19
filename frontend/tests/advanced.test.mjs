@@ -94,3 +94,15 @@ test('playback follows the full-rate clock and the source-frame hold', async () 
   assert.equal(playbackSample(6, 4000, 120, 240), 239);
   assert.equal(playbackFrame(24, 25), 0);
 });
+
+test('the landing example has reproducible, nonzero time-varying COVE output', async () => {
+  const {coveExample, exampleInput} = await import('../lib/cove-example.ts');
+  const media = coveExample();
+  assert.equal(media.length, 48);
+  assert.notDeepEqual(media[0], media[1]);
+  const field = analyzeCove(media, exampleInput.fps, [2, 2], true);
+  assert.equal(field.rows.length, media.length);
+  assert.equal(field.internal.length, 240);
+  assert.ok(field.field.some(value => Math.abs(value) > 0.01));
+  assert.notDeepEqual(field.rows[0].state, field.rows[1].state);
+});

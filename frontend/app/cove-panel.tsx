@@ -5,14 +5,14 @@ import { analyzeCove, crossMode, flattenCode, GRID, HAAR_SCALES, MODES, sites, s
 import { affine, type Calibration, ERP_BINS, parseCalibration, predictErp } from '../lib/cove-calibration';
 import { imageError, refineCode } from '../lib/cove-reconstruction';
 import { fieldCsv, fieldJson } from '../lib/cove-export';
-import type { Result } from '../lib/encoder';
+import type { Input, Result } from '../lib/encoder';
 import { playbackFrame, playbackSample } from '../lib/cove-playback';
 import FramePreview from './frame-preview';
 import renderer from '../lib/cove-decoder.json';
 
-function InputPreview({rgb}: {rgb: Uint8Array}) {
-  return <figure className="cove-figure"><figcaption>Visual input <span>Processed RGB</span></figcaption>
-    <div className="frame-view"><FramePreview rgb={rgb} label="Current visual input"/></div>
+function InputPreview({rgb, fallback, label}: {rgb: Uint8Array; fallback?: boolean; label?: string}) {
+  return <figure className="cove-figure"><figcaption>Visual input <span>{label ?? "Processed RGB"}</span></figcaption>
+    <div className={fallback ? "frame-view cove-example-fallback" : "frame-view"}><FramePreview rgb={rgb} label="Current visual input"/></div>
   </figure>;
 }
 
@@ -77,13 +77,19 @@ function grid(values: (number | null)[], width = GRID) {
   return Array.from({length: width}, (_, row) => values.slice(row * width, (row + 1) * width));
 }
 
-export default function CovePanel({frames, frame, source, onFrameChange}: {
-  frames: Uint8Array[]; frame: number; source: Result["input"]; onFrameChange: (frame: number) => void;
+export default function CovePanel({frames, frame, source, onFrameChange, home, startAdvanced}: {
+  frames: Uint8Array[]; frame: number; source: Input | Result["input"]; onFrameChange: (frame: number) => void;
+  home?: {label: string; example: boolean}; startAdvanced?: boolean;
 }) {
-  const [view, setView] = useState<'demo' | 'analysis'>('demo');
+  const [view, setView] = useState<'demo' | 'analysis'>(startAdvanced ? 'analysis' : 'demo');
   const [cursor, setCursor] = useState(0);
   const [playing, setPlaying] = useState(false);
   const clockStart = useRef(0);
+  const isHome = Boolean(home);
+  useEffect(() => {
+    if (isHome && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) setPlaying(true);
+  }, [isHome]);
+
   const [model, setModel] = useState<Calibration>();
   const [error, setError] = useState('');
   const [site, setSite] = useState(12);
@@ -92,7 +98,7 @@ export default function CovePanel({frames, frame, source, onFrameChange}: {
   const [electrode, setElectrode] = useState(0);
   const fileVersion = useRef(0);
   const stillImage = source.kind === "images" && frames.length === 1;
-  const activeModel = stillImage ? model : undefined;
+  const activeModel = stillImage && !home ? model : undefined;
   const slopes = activeModel?.coupling ?? DEFAULT_SLOPES;
   const analysis = useMemo(() => analyzeCove(frames, source.fps, slopes, true), [frames, source.fps, slopes]);
   const {rows, internal, internalRate, stepsPerFrame, field} = analysis;
@@ -110,15 +116,19 @@ export default function CovePanel({frames, frame, source, onFrameChange}: {
     const from = clockStart.current;
     const tick = (now: number) => {
       start ??= now;
-      const next = playbackSample(from, now-start, internalRate, internal.length);
+      const elapsed = now-start;
+      const loopDuration = internal.length / internalRate * 1000;
+      const next = home?.example
+        ? playbackSample(0, (from/internalRate*1000+elapsed) % loopDuration, internalRate, internal.length)
+        : playbackSample(from, elapsed, internalRate, internal.length);
       setCursor(next);
       onFrameChange(playbackFrame(next, stepsPerFrame));
-      if (next < internal.length-1) request = requestAnimationFrame(tick);
+      if (home?.example || next < internal.length-1) request = requestAnimationFrame(tick);
       else setPlaying(false);
     };
     request = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(request);
-  }, [playing, internalRate, internal.length, stepsPerFrame, onFrameChange, cursorMatchesFrame]);
+  }, [playing, internalRate, internal.length, stepsPerFrame, onFrameChange, cursorMatchesFrame, home?.example]);
 
   function seek(next: number) {
     setPlaying(false);
@@ -136,6 +146,7 @@ export default function CovePanel({frames, frame, source, onFrameChange}: {
   const row = rows[frame];
   const windowStart = Math.floor(frame / 8) * 8;
   const reconstruction = useMemo(() => {
+    if (isHome) return [];
     const window = rows.slice(windowStart, windowStart + 8);
     const forward = window.map(r => flattenCode(r.state));
     const refined = refineCode(forward, window.map(r => r.pixels), window.map(r => r.weights), renderer);
@@ -144,9 +155,9 @@ export default function CovePanel({frames, frame, source, onFrameChange}: {
       const decoded = affine(refined[i], renderer.weights, renderer.offset);
       return {plain, decoded, initial: imageError(r.pixels, plain), final: imageError(r.pixels, decoded)};
     });
-  }, [rows, windowStart])[frame - windowStart];
+  }, [rows, windowStart, isHome])[frame - windowStart];
   const {signal, spectrogramRows, spectrum, upperHz} = useMemo(() => {
-    const signal = internal.map(sample => sample[site]);
+    const signal = isHome ? [] : internal.map(sample => sample[site]);
     const power = spectrogram(signal, internalRate);
     const db = (value: number) => 10 * Math.log10(Math.max(1e-12, value));
     const bins = power[0]?.length ?? 0;
@@ -159,7 +170,12 @@ export default function CovePanel({frames, frame, source, onFrameChange}: {
       }));
     const upperHz = (bins - 1) * internalRate / Math.max(1, spectrumWindowLength(signal.length, internalRate));
     return {signal, spectrogramRows, spectrum, upperHz};
-  }, [internal, internalRate, site]);
+  }, [internal, internalRate, site, isHome]);
+  const sliceSize = Math.min(modeTrace.length, Math.round(.6*internalRate));
+  const sliceStart = Math.max(0, Math.min(modeTrace.length-sliceSize, sample-Math.floor(sliceSize/2)));
+  const waveWindow = home ? modeTrace.slice(sliceStart, sliceStart+sliceSize) : modeTrace;
+  const waveCursor = home ? sample-sliceStart : sample;
+  const wavePeak = useMemo(() => Math.max(1e-5, ...modeTrace.map(Math.abs)), [modeTrace]);
   const spectrumPeak = Math.max(-119, ...spectrogramRows.flat());
   const magnitude = sites.map((_, i) => Math.hypot(...stateAt(i, mode)));
   const phase = sites.map((_, i) => {
@@ -169,14 +185,14 @@ export default function CovePanel({frames, frame, source, onFrameChange}: {
   const {driveGain: gate, shiftHz} = crossMode(stateAt(site, 0), mode);
   const crossTrace = useMemo(() => {
     const gain: number[] = [], frequency: number[] = [];
-    for (let t = 0; t < internal.length; t++) {
+    for (let t = 0; !isHome && t < internal.length; t++) {
       const index = (t*sites.length + site) * MODES.length * 2;
       const coupling = crossMode([field![index], field![index+1]], mode);
       gain.push(coupling.driveGain);
       frequency.push(coupling.shiftHz);
     }
     return {gain, frequency};
-  }, [field, internal.length, mode, site]);
+  }, [field, internal.length, mode, site, isHome]);
   const firstTime = `${metric(1/internalRate)} s`;
   const lastTime = `${metric(internal.length/internalRate)} s`;
   const prediction = useMemo(() => {
@@ -194,12 +210,32 @@ export default function CovePanel({frames, frame, source, onFrameChange}: {
   }, [activeModel, frames, rows]);
   const erp = prediction.erp.slice(electrode*ERP_BINS, (electrode+1)*ERP_BINS);
   const peak = Math.max(1e-9, ...erp.map(Math.abs));
-  return <section className="cove-panel" aria-label="Distributed COVE analysis">
+  const waveform = <Trace title="Computed oscillatory waveform" values={waveWindow}
+    unit={`Site ${site+1} · ${MODES[mode]} Hz · real component`}
+    start={home ? `${metric((sliceStart+1)/internalRate)} s` : firstTime}
+    end={home ? `${metric((sliceStart+sliceSize)/internalRate)} s` : lastTime}
+    extent={home ? [-wavePeak,wavePeak] : undefined} cursor={waveCursor}/>;
+  const activity = <figure className="cove-figure"><figcaption>Retinotopic activity<span>Selected mode amplitude</span></figcaption>
+    <svg viewBox="0 0 64 64" aria-label="Amplitude at retinotopic sites" role="img">
+      {sites.map((point, i) => <circle key={i} cx={point.x+.5} cy={point.y+.5}
+        r={1.1+2.4*Math.sqrt(magnitude[i])} fill={i === site ? '#12638f' : '#529fad'}
+        stroke={i === site ? '#203449' : '#96c4cc'} strokeWidth=".5">
+        <title>{`Site ${i+1} · ${metric(magnitude[i])} a.u.`}</title>
+      </circle>)}
+    </svg>
+  </figure>;
+  return <section className={home ? "cove-panel cove-hero" : "cove-panel"} aria-label={home ? "Live COVE demonstration" : "Distributed COVE analysis"}>
+    {!home && <>
     <h3>Distributed COVE <small>· simulated population activity</small></h3>
     <div className="cove-views" role="group" aria-label="COVE view">
       <button aria-pressed={view === 'demo'} onClick={() => setView('demo')}>Demonstration</button>
       <button aria-pressed={view === 'analysis'} onClick={() => setView('analysis')}>Advanced analysis</button>
     </div>
+    </>}
+    {home && <div className="cove-hero-grid">
+      <InputPreview rgb={frames[frame]} fallback={home.example} label={home.label}/>
+      <div className="cove-hero-output">{waveform}{activity}</div>
+    </div>}
     <div className="cove-transport" aria-label="COVE playback controls">
       <button onClick={() => {
         if (playing) setPlaying(false);
@@ -217,13 +253,13 @@ export default function CovePanel({frames, frame, source, onFrameChange}: {
       <output aria-live="off">{metric((sample+1)/internalRate)} s · frame {frame+1}/{frames.length}</output>
     </div>
     <div className="cove-controls">
-      <button onClick={() => download(fieldJson(analysis, source, slopes, activeModel ? {
+      {!home && "processed_frames_sha256" in source && <><button onClick={() => download(fieldJson(analysis, source, slopes, activeModel ? {
         subject: activeModel.subject, channels: activeModel.channels,
         onset_bin_centers_ms: Array.from({length: ERP_BINS}, (_, i) => 10+20*i),
         prediction_scaled_csd_flat: prediction.erp,
         held_out: activeModel.schema === 'cove-erp-v2' ? activeModel.held_out : null,
       } : null), 'cove-field.json')}>Export COVE JSON</button>
-      <button onClick={() => download(fieldCsv(analysis, source), 'cove-frame-states.csv')}>Export COVE CSV</button>
+      <button onClick={() => download(fieldCsv(analysis, source), 'cove-frame-states.csv')}>Export COVE CSV</button></>}
       <label>Site <select value={site} onChange={event => setSite(Number(event.target.value))}>
         {sites.map((_, index) => <option key={index} value={index}>{index+1}</option>)}
       </select></label>
@@ -233,7 +269,7 @@ export default function CovePanel({frames, frame, source, onFrameChange}: {
       {view === 'analysis' && <label>Haar scale <select value={scale} onChange={event => setScale(Number(event.target.value))}>
         {HAAR_SCALES.map((size, index) => <option key={size} value={index}>{size}+{size} frames</option>)}
       </select></label>}
-      {stillImage && <label>ERP calibration JSON <input type="file" accept=".json,application/json" onChange={async event => {
+      {!home && stillImage && <label>ERP calibration JSON <input type="file" accept=".json,application/json" onChange={async event => {
         const file = event.target.files?.[0];
         const version = ++fileVersion.current;
         setError('');
@@ -255,22 +291,13 @@ export default function CovePanel({frames, frame, source, onFrameChange}: {
       </select></label>}
     </div>
     {error && <p className="error" role="alert">{error}</p>}
+    {home ? <p className="demo-caption">Computed COVE states · simulated population activity</p> : <>
     <p className="hint">Site {site+1} · eccentricity {metric(sites[site].eccentricity)} · cross-mode drive gain {metric(gate)} · instantaneous frequency shift {metric(shiftHz)} Hz</p>
     <div className="plot-grid">
       <InputPreview rgb={frames[frame]}/>
       <Heatmap title="Forward code reconstruction" rows={grid(reconstruction.plain, 12)} min={0} max={1}
         unit={`RMSE ${metric(reconstruction.initial.rmse)}`} grayscale/>
-      <Trace title="Selected mode waveform" values={modeTrace} unit={`Site ${site+1} · ${MODES[mode]} Hz mode · real component`}
-        start={firstTime} end={lastTime} cursor={sample}/>
-      <figure className="cove-figure"><figcaption>Retinotopic activity<span>Selected mode amplitude</span></figcaption>
-        <svg viewBox="0 0 64 64" aria-label="Amplitude at retinotopic sites" role="img">
-          {sites.map((point, i) => <circle key={i} cx={point.x+.5} cy={point.y+.5}
-            r={1.1+2.4*Math.sqrt(magnitude[i])} fill={i === site ? '#12638f' : '#529fad'}
-            stroke={i === site ? '#203449' : '#96c4cc'} strokeWidth=".5">
-            <title>{`Site ${i+1} · ${metric(magnitude[i])} a.u.`}</title>
-          </circle>)}
-        </svg>
-      </figure>
+      {waveform}{activity}
       <Heatmap title="Population amplitude" rows={grid(magnitude)} min={0} max={.25} unit="0–0.25 a.u. display scale"/>
       <Heatmap title="Population phase" rows={grid(phase)} min={-Math.PI} max={Math.PI} unit="−π to π rad · gray if undefined"/>
       {view === 'analysis' && <>
@@ -318,5 +345,6 @@ export default function CovePanel({frames, frame, source, onFrameChange}: {
     </p>}
     {activeModel && <p className="hint">ERP predictions are relative to still-image onset. Held-out metrics describe the calibration dataset.</p>}
     {stillImage && !model && <p className="hint">Load an exported calibration to display the participant-specific ERP prediction.</p>}
+    </>}
   </section>;
 }
